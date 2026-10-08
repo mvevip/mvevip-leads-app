@@ -1,0 +1,161 @@
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+enum Role {
+  ADMIN
+  ASESOR
+}
+
+enum ReminderStatus {
+  PENDING
+  COMPLETED
+  TRANSFERRED
+  DISMISSED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum SourceType {
+  MANUAL
+  BOT_VOICE
+  BOT_IMAGE
+  BOT_TEXT
+}
+
+enum FollowupAction {
+  NOTE
+  RESCHEDULE
+  STATUS_CHANGE
+  TRANSFER
+}
+
+model User {
+  id                 String   @id @default(uuid())
+  name               String
+  email              String   @unique
+  passwordHash       String
+  role               Role     @default(ASESOR)
+  avatarUrl          String?  @db.LongText
+  phone              String?
+  isActive           Boolean  @default(true)
+  mustChangePassword Boolean  @default(false)
+  isFirstLogin       Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  createdReminders    Reminder[]         @relation("CreatorRelation")
+  assignedReminders   Reminder[]         @relation("AssignedRelation")
+  pushSubscriptions   PushSubscription[]
+  followups           ReminderFollowup[]
+  chatMessages        ChatMessage[]
+
+  @@map("users")
+}
+
+model PushSubscription {
+  id         String   @id @default(uuid())
+  userId     String
+  endpoint   String   @db.Text
+  p256dhKey  String   @db.Text
+  authKey    String   @db.Text
+  userAgent  String?  @db.Text
+  createdAt  DateTime @default(now())
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("push_subscriptions")
+}
+
+model ChatMessage {
+  id        String   @id @default(uuid())
+  userId    String
+  role      String   // "user" | "assistant"
+  content   String   @db.LongText
+  mediaUrl  String?  @db.LongText
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("chat_messages")
+}
+
+model Reminder {
+  id               String         @id @default(uuid())
+  creatorId        String
+  assignedId       String
+  clientName       String
+  clientPhone      String?
+  title            String
+  description      String?        @db.Text
+  scheduledAt      DateTime
+  status           ReminderStatus @default(PENDING)
+  priority         Priority       @default(MEDIUM)
+  dismissReason    String?        @db.Text
+  sourceType       SourceType     @default(MANUAL)
+  mediaUrl         String?        @db.LongText
+  notificationSent Boolean        @default(false)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  creator          User           @relation("CreatorRelation", fields: [creatorId], references: [id])
+  assigned         User           @relation("AssignedRelation", fields: [assignedId], references: [id])
+  followups        ReminderFollowup[]
+  tags             ReminderTag[]
+
+  @@index([assignedId, scheduledAt])
+  @@index([status, scheduledAt])
+  @@index([creatorId])
+  @@map("reminders")
+}
+
+model ReminderFollowup {
+  id         String         @id @default(uuid())
+  reminderId String
+  userId     String
+  note       String         @db.Text
+  actionType FollowupAction @default(NOTE)
+  createdAt  DateTime       @default(now())
+
+  reminder   Reminder       @relation(fields: [reminderId], references: [id], onDelete: Cascade)
+  user       User           @relation(fields: [userId], references: [id])
+
+  @@index([reminderId])
+  @@map("reminder_followups")
+}
+
+model Tag {
+  id        String        @id @default(uuid())
+  name      String        @unique
+  colorHex  String        @default("#3B82F6")
+  createdAt DateTime      @default(now())
+
+  reminders ReminderTag[]
+
+  @@map("tags")
+}
+
+model ReminderTag {
+  reminderId String
+  tagId      String
+
+  reminder   Reminder @relation(fields: [reminderId], references: [id], onDelete: Cascade)
+  tag        Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([reminderId, tagId])
+  @@map("reminder_tags")
+}

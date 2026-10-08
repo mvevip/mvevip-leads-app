@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --color-primary: #9AC31C;
+    --color-primary-dark: #82A516;
+  }
+
+  body {
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    touch-action: manipulation;
+  }
+}
+
+/* Scrollbars ocultos por defecto para experiencia nativa de app móvil */
+::-webkit-scrollbar {
+  display: none !important;
+  width: 0px !important;
+  height: 0px !important;
+  background: transparent !important;
+}
+
+* {
+  -ms-overflow-style: none !important;
+  scrollbar-width: none !important;
+}
+
+/* Ocultar barras de scroll manteniendo desplazamiento fluido */
+.no-scrollbar::-webkit-scrollbar,
+.no-scrollbar *::-webkit-scrollbar {
+  display: none !important;
+  width: 0px !important;
+  height: 0px !important;
+}
+
+.no-scrollbar,
+.no-scrollbar * {
+  -ms-overflow-style: none !important;
+  scrollbar-width: none !important;
+}
+
+.safe-top {
+  padding-top: max(env(safe-area-inset-top, 0px), 10px);
+}
+
+.bottom-nav-shadow {
+  box-shadow: 0 -10px 25px -5px rgba(0, 0, 0, 0.05), 0 -8px 10px -6px rgba(0, 0, 0, 0.01);
+}
+
+.dark .bottom-nav-shadow {
+  box-shadow: 0 -10px 25px -5px rgba(0, 0, 0, 0.6), 0 -8px 10px -6px rgba(0, 0, 0, 0.4);
+}
+

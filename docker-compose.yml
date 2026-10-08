@@ -1,0 +1,77 @@
+services:
+  db:
+    image: mysql:8.0
+    container_name: mvevip_lead_mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      TZ: America/Guayaquil
+    ports:
+      - "${PORT_DB}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "${DB_USER}", "-p${DB_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - mvevip_network
+
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: mvevip_lead_server
+    restart: always
+    ports:
+      - "${PORT_BACKEND}:6411"
+    environment:
+      PORT: 6411
+      TZ: America/Guayaquil
+      DATABASE_URL: ${DATABASE_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY}
+      VAPID_SUBJECT: ${VAPID_SUBJECT}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      CLIENT_URL: ${CLIENT_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./server:/app
+      - /app/node_modules
+    networks:
+      - mvevip_network
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: mvevip_lead_client
+    restart: always
+    ports:
+      - "${PORT_FRONTEND}:6410"
+    environment:
+      TZ: America/Guayaquil
+      VITE_API_URL: http://localhost:${PORT_BACKEND}/api
+      VITE_VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY}
+    volumes:
+      - ./client:/app
+      - /app/node_modules
+    depends_on:
+      - server
+    networks:
+      - mvevip_network
+
+volumes:
+  mysql_data:
+
+networks:
+  mvevip_network:
+    driver: bridge

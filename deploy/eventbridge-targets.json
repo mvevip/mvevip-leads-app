@@ -1,0 +1,7 @@
+[
+  {
+    "Id": "1",
+    "Arn": "arn:aws:lambda:us-west-2:021891594659:function:mvevip-lead-api",
+    "Input": "{\"action\":\"cron\"}"
+  }
+]

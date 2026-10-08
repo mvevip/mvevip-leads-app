@@ -1,0 +1,5 @@
+{
+  "version": "1.0.4",
+  "buildTime": "2026-10-08T22:00:00Z",
+  "notes": "Priorización de usuario actual en chatbot IA, prohibición estricta de borrado en BD mvevip_leads, y selector multi-usuario con checkboxes en Agenda para administradores"
+}
