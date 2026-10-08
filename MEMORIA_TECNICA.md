@@ -172,9 +172,35 @@ El proyecto cuenta con scripts en PowerShell automatizados para despliegues cont
 
 ## 7. Pendientes y Próximos Pasos (Roadmap)
 
+### 7.1. Tarea Prioritaria Próxima Sesión: Blindaje y Seguridad Integral de API y Aplicación (Alta Prioridad)
+
+Para prevenir ataques de fuerza bruta, abuso de consumo de la cuota de Gemini, scraping o explotación directa de los endpoints de la API fuera de la aplicación:
+
+1. **Integración de Cloudflare (WAF & Anti-Bot):**
+   - Habilitar proxy DNS de Cloudflare delante de `leads.mvevip.com`.
+   - **Bot Fight Mode & WAF Rules:** Detección y bloqueo automático de scrapers, scripts automatizados y bots maliciosos antes de que lleguen a la infraestructura de AWS.
+   - **Cloudflare Turnstile o Managed Challenge:** Desafíos invisibles para peticiones sospechosas sin fricción para usuarios reales.
+
+2. **Protección Anti-Fuerza Bruta y Rate Limiting (Backend):**
+   - **Rate Limiting de Autenticación (`/api/auth/login`):** Máximo 5 intentos fallidos por IP en una ventana de 15 minutos (usando `express-rate-limit` con almacenamiento en memoria o Redis).
+   - **Rate Limiting de Asistente IA (`/api/bot/chat`):** Control estricto de invocaciones por usuario/IP (ej. máx. 15 mensajes por minuto) para evitar ataques de denegación de servicio o sobrecostos de la API de Gemini.
+   - **Rate Limiting Global de API:** Techo de 100 peticiones por minuto para endpoints regulares.
+
+3. **Restricción de Acceso Exclusivo desde la App:**
+   - **CORS Estricto:** Permitir únicamente llamadas desde el origen oficial `https://leads.mvevip.com` (rechazar llamadas de orígenes nulos o terceros).
+   - **Cabecera Secreta de Origen (CDN / API Gateway):** Inyectar un header personalizado seguro (ej. `X-Custom-App-Secret`) entre CloudFront/Cloudflare y API Gateway / Lambda, garantizando que nadie pueda invocar la URL directa de la Lambda saltándose el firewall.
+   - **Cabeceras de Seguridad HTTP (Helmet):** Configurar `Content-Security-Policy` (CSP), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` y `HSTS`.
+   - **Validación Estricta de Tamaño de Payloads:** Limitar cuerpos de peticiones JSON para prevenir desbordamientos o DoS por payloads masivos.
+
+*(Nota: En la base de datos no se requieren modificaciones inmediatas, ya que las restricciones de consulta y prohibición de eliminación se encuentran blindadas a nivel de servicio).*
+
+### 7.2. Funcionalidades Adicionales
+
 | Ítem | Descripción | Prioridad |
 |---|---|---|
+| **Seguridad API & Cloudflare (WAF/Anti-Bot)** | Blindaje de endpoints, anti-brute force, rate limiting y acceso exclusivo desde la app. | **Alta** |
 | **Audio Transcripción Directa** | Integración nativa del audio streaming de Gemini para respuestas de voz sintetizada (TTS) en el chat. | Media |
 | **Alertas WhatsApp / Webhook** | Disparador de mensajes de WhatsApp además de Web Push cuando un lead responde o entra al embudo. | Media |
 | **Métricas y Estadísticas en Chat** | Respuestas automáticas con gráficos dinámicos generados por la IA en el chat sobre tasa de conversión y cierres semanales. | Baja |
 | **Geolocalización de Visitas** | Registro de ubicación GPS al marcar un recordatorio de visita presencial como completado. | Baja |
+
