@@ -1,5 +1,5 @@
 {
-  "version": "1.0.4",
-  "buildTime": "2026-10-08T22:00:00Z",
-  "notes": "Priorización de usuario actual en chatbot IA, prohibición estricta de borrado en BD mvevip_leads, y selector multi-usuario con checkboxes en Agenda para administradores"
+  "version": "1.0.5",
+  "buildTime": "2026-10-12T21:20:00Z",
+  "notes": "Diseño responsivo para Desktop y Tablets, notificaciones Push con sonido y vibración nativos, y Drag & Drop y pegado de imágenes en el Asistente IA"
 }

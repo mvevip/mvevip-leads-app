@@ -1,5 +1,5 @@
 // Service Worker para MVEVIP Lead App (Web Push & Caching)
-const CACHE_NAME = 'mvevip-leads-v1.0.4';
+const CACHE_NAME = 'mvevip-leads-v1.0.5';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] Instalando versión', CACHE_NAME);
@@ -50,7 +50,10 @@ self.addEventListener('push', (event) => {
     body: data.body,
     icon: data.icon || '/icons/icon-192.png',
     badge: data.badge || '/icons/badge-72.png',
-    vibrate: [200, 100, 200, 100, 200], // Patrón de vibración en el móvil
+    vibrate: [200, 100, 200, 100, 200], // Patrón de vibración rítmico en el móvil
+    silent: false,                       // Asegura que no sea forzado a modo silencioso
+    renotify: true,                      // Vuelve a sonar y vibrar aunque haya alertas previas
+    tag: data.tag || `lead-reminder-${Date.now()}`,
     data: {
       url: data.url || '/'
     },
@@ -61,9 +64,16 @@ self.addEventListener('push', (event) => {
     requireInteraction: true // Mantiene la notificación visible en pantalla bloqueada
   };
 
-  event.waitUntil(
-    self.registration.showNotification(data.title, options)
-  );
+  // Notificar también a clientes/ventanas abiertas para reproducir chime interactivo
+  const notifyClientsPromise = self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+    clients.forEach((client) => {
+      client.postMessage({ type: 'PUSH_NOTIFICATION_RECEIVED', payload: data });
+    });
+  });
+
+  const showNotificationPromise = self.registration.showNotification(data.title, options);
+
+  event.waitUntil(Promise.all([showNotificationPromise, notifyClientsPromise]));
 });
 
 // Evento CLICK en la Notificación

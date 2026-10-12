@@ -101,7 +101,7 @@ export default function ReminderDetailModal({ reminder, isOpen, onClose, onUpdat
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/40 backdrop-blur-xs p-3">
-      <div className="bg-white w-full max-w-md rounded-3xl p-5 shadow-2xl border border-slate-100 max-h-[90vh] overflow-y-auto animate-in fade-in slide-in-from-bottom-5">
+      <div className="bg-white dark:bg-neutral-850 w-full max-w-md md:max-w-xl lg:max-w-2xl rounded-3xl p-5 shadow-2xl border border-slate-100 dark:border-neutral-750 max-h-[90vh] overflow-y-auto animate-in fade-in slide-in-from-bottom-5">
         
         {/* Cabecera */}
         <div className="flex justify-between items-start pb-3 border-b border-slate-100">

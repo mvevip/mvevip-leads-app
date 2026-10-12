@@ -10,10 +10,11 @@ import ReminderDetailModal from '../components/ReminderDetailModal';
 import AdminUserManagementModal from '../components/AdminUserManagementModal';
 import UserAvatar from '../components/UserAvatar';
 import { registerPushNotifications, triggerTestPush } from '../services/pushService';
+import soundService from '../services/soundService';
 import api from '../services/api';
 import { isSameDay, format } from 'date-fns';
 import { es } from 'date-fns/locale';
-import { Bell, LogOut, Shield, RefreshCw, Calendar as CalendarIcon, Clock, CheckCircle2, Users, Sun, Moon, Camera, Trash2, Loader2, Sparkles } from 'lucide-react';
+import { Bell, LogOut, Shield, RefreshCw, Calendar as CalendarIcon, Clock, CheckCircle2, Users, Sun, Moon, Camera, Trash2, Loader2, Sparkles, Volume2, VolumeX } from 'lucide-react';
 
 export default function HomePage() {
   const { user, logout, isAdmin, updateCurrentUser } = useAuth();
@@ -39,6 +40,30 @@ export default function HomePage() {
     return null;
   });
   const [loading, setLoading] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(() => soundService.isSoundEnabled());
+
+  // Escuchar evento push desde el Service Worker para reproducir tono en vivo
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+      const handleSwMessage = (event) => {
+        if (event.data && event.data.type === 'PUSH_NOTIFICATION_RECEIVED') {
+          soundService.playNotificationSound();
+          fetchReminders();
+        }
+      };
+      navigator.serviceWorker.addEventListener('message', handleSwMessage);
+      return () => navigator.serviceWorker.removeEventListener('message', handleSwMessage);
+    }
+  }, []);
+
+  const handleToggleSound = () => {
+    const nextState = !soundEnabled;
+    setSoundEnabled(nextState);
+    soundService.setSoundEnabled(nextState);
+    if (nextState) {
+      soundService.testNotificationAlert();
+    }
+  };
 
   // Filtro multi-usuario para ADMIN en Agenda (por defecto SOLO el usuario actual)
   const [selectedUserIds, setSelectedUserIds] = useState(() => (user?.id ? [user.id] : []));
@@ -187,54 +212,100 @@ export default function HomePage() {
   const selectedDateText = isToday 
     ? 'Hoy' 
     : format(selectedDate, "EEEE d 'de' MMMM", { locale: es });
+  const unreadAlertsCount = reminders.filter(r => r.notificationSent).length;
+  const isUnifiedView = activeTab === 'home' || activeTab === 'calendar';
 
   return (
     <div
       className={
         activeTab === 'home'
           ? "fixed inset-0 flex flex-col overflow-hidden bg-[#F8FAFC] dark:bg-[#121212] text-slate-800 dark:text-neutral-100 transition-colors duration-200"
-          : "min-h-screen bg-[#F8FAFC] dark:bg-[#121212] pb-24 text-slate-800 dark:text-neutral-100 transition-colors duration-200 overflow-y-auto"
+          : activeTab === 'calendar'
+          ? "min-h-screen lg:fixed lg:inset-0 lg:h-screen lg:overflow-hidden flex flex-col bg-[#F8FAFC] dark:bg-[#121212] pb-24 lg:pb-0 text-slate-800 dark:text-neutral-100 transition-colors duration-200 overflow-y-auto lg:overflow-hidden"
+          : "min-h-screen bg-[#F8FAFC] dark:bg-[#121212] pb-24 md:pb-8 text-slate-800 dark:text-neutral-100 transition-colors duration-200 overflow-y-auto"
       }
     >
-      {activeTab === 'home' ? (
+      {isUnifiedView ? (
         <>
-          {/* Cabecera Principal FIJA (Avatar, Nombre y Acciones) */}
-          <div className="shrink-0 w-full max-w-md mx-auto px-4 safe-top pb-1 bg-[#F8FAFC]/95 dark:bg-[#121212]/95 backdrop-blur-md z-20">
-            <Header user={user} onOpenSettings={() => setActiveTab('profile')} />
+          {/* Cabecera Principal FIJA */}
+          <div className="shrink-0 w-full max-w-md md:max-w-4xl lg:max-w-7xl mx-auto px-4 md:px-6 lg:px-8 safe-top pb-1 bg-[#F8FAFC]/95 dark:bg-[#121212]/95 backdrop-blur-md z-20">
+            <Header 
+              user={user} 
+              onOpenSettings={() => setActiveTab('profile')} 
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+              unreadCount={unreadAlertsCount}
+            />
           </div>
 
-          {/* PESTAÑA INICIO: ASISTENTE COMERCIAL IA PERMANENTE */}
-          <div className="flex-1 min-h-0 w-full max-w-md mx-auto px-4 flex flex-col overflow-hidden">
-            <AssistantChatView
-              user={user}
-              onReminderUpdated={fetchReminders}
-            />
+          {/* VISTA UNIFICADA EN DESKTOP (lg: >= 1024px) */}
+          <div className="hidden lg:flex flex-1 min-h-0 w-full max-w-7xl mx-auto px-6 lg:px-8 pb-3 gap-5 overflow-hidden">
+            {/* Panel Izquierdo: Calendario & Agenda Completa */}
+            <div className="w-[52%] xl:w-[54%] h-full flex flex-col min-h-0 bg-white/80 dark:bg-neutral-850/80 backdrop-blur-md rounded-3xl border border-slate-200/80 dark:border-neutral-800 shadow-xs p-4 overflow-y-auto no-scrollbar">
+              <CalendarAgendaView
+                currentUser={user}
+                selectedDate={selectedDate}
+                onSelectDate={setSelectedDate}
+                reminders={reminders}
+                onRefresh={fetchReminders}
+                isAdmin={isAdmin}
+                usersList={usersList}
+                selectedUserIds={selectedUserIds}
+                onSelectedUserIdsChange={setSelectedUserIds}
+                onSelectReminder={setSelectedReminder}
+                isDualPane={true}
+              />
+            </div>
+
+            {/* Panel Derecho: Chatbot Asistente IA Permanente */}
+            <div className="w-[48%] xl:w-[46%] h-full flex flex-col min-h-0 bg-white/95 dark:bg-neutral-850/95 backdrop-blur-md rounded-3xl border border-slate-200/80 dark:border-neutral-800 shadow-xs p-3 overflow-hidden">
+              <AssistantChatView
+                user={user}
+                onReminderUpdated={fetchReminders}
+              />
+            </div>
+          </div>
+
+          {/* VISTA MÓVIL Y TABLET (< lg: < 1024px) */}
+          <div className="lg:hidden flex-1 min-h-0 w-full max-w-md md:max-w-3xl mx-auto px-4 md:px-6 flex flex-col overflow-hidden">
+            {activeTab === 'home' ? (
+              <AssistantChatView
+                user={user}
+                onReminderUpdated={fetchReminders}
+              />
+            ) : (
+              <div className="overflow-y-auto no-scrollbar pb-24 flex-1">
+                <CalendarAgendaView
+                  currentUser={user}
+                  selectedDate={selectedDate}
+                  onSelectDate={setSelectedDate}
+                  reminders={reminders}
+                  onRefresh={fetchReminders}
+                  isAdmin={isAdmin}
+                  usersList={usersList}
+                  selectedUserIds={selectedUserIds}
+                  onSelectedUserIdsChange={setSelectedUserIds}
+                  onSelectReminder={setSelectedReminder}
+                  isDualPane={false}
+                />
+              </div>
+            )}
           </div>
         </>
       ) : (
-        <div className="max-w-md mx-auto px-5 safe-top">
+        <div className="w-full max-w-md md:max-w-4xl lg:max-w-6xl xl:max-w-7xl mx-auto px-4 md:px-8 safe-top">
           {/* Cabecera Principal */}
-          <Header user={user} onOpenSettings={() => setActiveTab('profile')} />
-
-          {/* PESTAÑA AGENDA: CALENDARIO CON SWIPE Y GESTIÓN DE COMPROMISOS */}
-          {activeTab === 'calendar' && (
-            <CalendarAgendaView
-              currentUser={user}
-              selectedDate={selectedDate}
-              onSelectDate={setSelectedDate}
-              reminders={reminders}
-              onRefresh={fetchReminders}
-              isAdmin={isAdmin}
-              usersList={usersList}
-              selectedUserIds={selectedUserIds}
-              onSelectedUserIdsChange={setSelectedUserIds}
-              onSelectReminder={setSelectedReminder}
-            />
-        )}
+          <Header 
+            user={user} 
+            onOpenSettings={() => setActiveTab('profile')} 
+            activeTab={activeTab}
+            onTabChange={setActiveTab}
+            unreadCount={unreadAlertsCount}
+          />
 
         {/* PESTAÑA PERFIL Y AJUSTES */}
         {activeTab === 'profile' && (
-          <div className="py-4 space-y-4">
+          <div className="py-4 grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
             <div className="bg-white dark:bg-neutral-800 rounded-3xl p-5 border border-slate-100 dark:border-neutral-700 shadow-xs text-center">
               <div className="relative inline-block mx-auto mb-2">
                 <UserAvatar user={user} className="w-20 h-20 text-2xl" />
@@ -242,7 +313,7 @@ export default function HomePage() {
                   type="button"
                   onClick={() => profileFileInputRef.current?.click()}
                   disabled={uploadingPhoto}
-                  className="absolute bottom-0 right-0 w-7 h-7 bg-[#9AC31C] text-neutral-950 rounded-full flex items-center justify-center shadow-md hover:bg-[#86AB17] active:scale-95 transition-all"
+                  className="absolute bottom-0 right-0 w-7 h-7 bg-[#9AC31C] text-neutral-950 rounded-full flex items-center justify-center shadow-md hover:bg-[#86AB17] active:scale-95 transition-all cursor-pointer"
                   title="Cambiar foto de perfil"
                 >
                   <Camera className="w-3.5 h-3.5 stroke-[2.5]" />
@@ -272,7 +343,7 @@ export default function HomePage() {
                   type="button"
                   onClick={() => profileFileInputRef.current?.click()}
                   disabled={uploadingPhoto}
-                  className="px-3 py-1.5 bg-[#9AC31C]/15 hover:bg-[#9AC31C]/25 text-[#6B8A0E] dark:text-[#9AC31C] rounded-xl text-xs font-bold transition-all flex items-center gap-1.5"
+                  className="px-3 py-1.5 bg-[#9AC31C]/15 hover:bg-[#9AC31C]/25 text-[#6B8A0E] dark:text-[#9AC31C] rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
                 >
                   {uploadingPhoto ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Camera className="w-3.5 h-3.5" />}
                   <span>{uploadingPhoto ? 'Guardando...' : (user?.avatarUrl && !user.avatarUrl.includes('unsplash') ? 'Cambiar Foto' : 'Subir Foto')}</span>
@@ -283,7 +354,7 @@ export default function HomePage() {
                     type="button"
                     onClick={handleRemoveProfilePhoto}
                     disabled={uploadingPhoto}
-                    className="px-3 py-1.5 bg-rose-50 dark:bg-rose-950/30 hover:bg-rose-100 text-rose-600 dark:text-rose-400 rounded-xl text-xs font-bold transition-all flex items-center gap-1"
+                    className="px-3 py-1.5 bg-rose-50 dark:bg-rose-950/30 hover:bg-rose-100 text-rose-600 dark:text-rose-400 rounded-xl text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                     <span>Quitar Foto</span>
@@ -308,20 +379,57 @@ export default function HomePage() {
 
                 <button
                   onClick={toggleTheme}
-                  className={`w-12 h-6 flex items-center rounded-full p-1 transition-colors duration-300 ${
-                    isDark ? 'bg-[#9AC31C] justify-end' : 'bg-slate-300 justify-start'
+                  className={`w-12 h-6 flex items-center rounded-full p-1 transition-colors duration-300 cursor-pointer ${
+                    isDark ? 'bg-[#9AC31C] justify-end' : 'bg-slate-300 dark:bg-neutral-600 justify-start'
                   }`}
                 >
                   <div className="bg-white w-4 h-4 rounded-full shadow-md transform transition-transform"></div>
                 </button>
               </div>
 
+              {/* SWITCH DE SONIDO Y VIBRACIÓN DE NOTIFICACIONES */}
+              <div className="p-3 bg-slate-50 dark:bg-neutral-750 rounded-2xl flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  {soundEnabled ? (
+                    <Volume2 className="w-5 h-5 text-[#9AC31C]" />
+                  ) : (
+                    <VolumeX className="w-5 h-5 text-slate-400" />
+                  )}
+                  <div>
+                    <span className="text-xs font-bold text-slate-800 dark:text-neutral-100 block">Sonido & Vibración Push</span>
+                    <span className="text-[10px] text-slate-400 dark:text-neutral-400">
+                      {soundEnabled ? 'Alertas sonoras y hápticas activas' : 'Alertas en silencio'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => soundService.testNotificationAlert()}
+                    className="px-2 py-1 bg-[#9AC31C]/15 hover:bg-[#9AC31C]/25 text-[#6B8A0E] dark:text-[#9AC31C] rounded-lg text-[10px] font-bold transition-all cursor-pointer"
+                    title="Probar tono y vibración"
+                  >
+                    Probar
+                  </button>
+
+                  <button
+                    onClick={handleToggleSound}
+                    className={`w-12 h-6 flex items-center rounded-full p-1 transition-colors duration-300 cursor-pointer ${
+                      soundEnabled ? 'bg-[#9AC31C] justify-end' : 'bg-slate-300 dark:bg-neutral-600 justify-start'
+                    }`}
+                  >
+                    <div className="bg-white w-4 h-4 rounded-full shadow-md transform transition-transform"></div>
+                  </button>
+                </div>
+              </div>
+
               <button
                 onClick={handleEnablePush}
-                className="w-full py-2.5 px-4 bg-slate-50 dark:bg-neutral-750 hover:bg-slate-100 dark:hover:bg-neutral-700 rounded-xl text-xs font-semibold text-slate-700 dark:text-neutral-200 flex items-center justify-between transition-colors"
+                className="w-full py-2.5 px-4 bg-slate-50 dark:bg-neutral-750 hover:bg-slate-100 dark:hover:bg-neutral-700 rounded-xl text-xs font-semibold text-slate-700 dark:text-neutral-200 flex items-center justify-between transition-colors cursor-pointer"
               >
                 <span className="flex items-center gap-2"><Bell className="w-4 h-4 text-[#9AC31C]" /> Notificaciones Push ({pushStatus === 'active' ? 'Activas' : 'Inactivas'})</span>
-                <span className="text-[#9AC31C] font-bold">Probar</span>
+                <span className="text-[#9AC31C] font-bold">Probar Push</span>
               </button>
 
               {/* INFORMACIÓN DE VERSIÓN Y ACTUALIZADOR PWA */}

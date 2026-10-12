@@ -1,10 +1,10 @@
 # MEMORIA TÉCNICA - MVEVIP LEAD REMINDER & ASISTENTE IA
 
 **Proyecto:** MVEVIP Leads & Recordatorios (PWA)  
-**Versión Actual:** 1.0.4  
+**Versión Actual:** 1.0.5  
 **Dominio de Producción:** [https://leads.mvevip.com](https://leads.mvevip.com)  
 **Repositorio:** [https://github.com/caloloc2/mvevip_leads_agente](https://github.com/caloloc2/mvevip_leads_agente)  
-**Fecha:** 8 de Octubre de 2026  
+**Fecha:** 12 de Octubre de 2026  
 
 ---
 
@@ -95,6 +95,21 @@ flowchart TD
 ### 3.4. Sistema de Notificaciones y Actualizaciones PWA
 - **Resolución de Bucle de Actualización:** Se unificó la versión a `1.0.4` en `version.js`, `public/version.json` y el Service Worker `sw.js`. Se corrigió el listener de `UpdateContext.jsx` para evitar que vuelva a sugerir actualizar una vez que la versión actual ya está instalada.
 - **Notificaciones Web Push:** Configuración 100% gratuita con VAPID, con almacenamiento de subscripciones por dispositivo y compatibilidad completa con Safari en iOS 16.4+ y Google Chrome en Android.
+
+### 3.5. Versión 1.0.5: Estación de Trabajo Desktop Unificada, Alertas Hápticas/Sonoras y Drag & Drop
+- **Estación de Trabajo Unificada en Desktop (Split-Screen en `lg: >= 1024px`):**
+  - **Panel Izquierdo (Calendario y Agenda):** Despliega el calendario completo con selector de fechas, tarjeta semanal interactiva `ProgressCard`, filtro multi-asesor con checkboxes, barra de búsqueda `SearchBar`, switch de `Pendientes` vs `Realizados`, y la línea de tiempo de compromisos con scroll independiente.
+  - **Panel Derecho (Chatbot Asistente IA):** Integra de forma permanente el chatbot multimodal con Gemini Flash. Cualquier cambio realizado desde el bot se refleja en tiempo real en la agenda de la izquierda.
+  - **Móviles y Tablets Pequeñas (`< lg`):** Conserva la navegación táctil optimizada para teléfonos con `BottomNav` para alternar entre el Asistente y la Agenda con gestos swipe.
+  - **Navegación Adaptativa:** En desktop (`lg:`), el menú superior unifica el acceso principal como **"Agenda & Asistente IA"**, junto a **"Alertas"** y **"Perfil"**.
+  - **Perfil en Grid:** La pantalla de configuración y perfil se organiza en cuadrícula de dos columnas (`grid-cols-1 md:grid-cols-2`).
+- **Sonido y Vibración en Notificaciones Push:**
+  - **Web Audio API Chime:** Sintetizador de tonos en primer plano sin descargas externas (`soundService.js`) con acordes D5 -> A5 y decaimiento exponencial natural de campana.
+  - **Patrones Hápticos de Vibración:** Inclusión de patrón `[200, 100, 200, 100, 200]` con opciones `silent: false` y `renotify: true` en el Service Worker.
+  - **Control de Usuario:** Switch de activación/silencio y botón de prueba interactivo en la pestaña de Perfil.
+- **Drag & Drop y Soporte de Portapapeles (`Ctrl + V`) en Asistente IA:**
+  - Detección de arrastre de imágenes sobre la ventana del chat con overlay visual verde lima (`#9AC31C`) y borde punteado interactivo.
+  - Soporte de pegado directo desde portapapeles (`onPaste`) para capturas tomadas con herramientas de recorte (`Win + Shift + S`) o copiado de imágenes.
 
 ---
 

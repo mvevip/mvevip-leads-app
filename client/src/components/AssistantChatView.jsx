@@ -132,9 +132,11 @@ export default function AssistantChatView({ user, onReminderUpdated }) {
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [audioBlob, setAudioBlob] = useState(null);
 
-  // Image attachment
+  // Image attachment & Drag and Drop
   const [selectedImage, setSelectedImage] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragCounterRef = useRef(0);
 
   // Modal para ver imagen en grande (Lightbox)
   const [previewModalUrl, setPreviewModalUrl] = useState(null);
@@ -235,6 +237,74 @@ export default function AssistantChatView({ user, onReminderUpdated }) {
       }
       setSelectedImage(file);
       setImagePreview(URL.createObjectURL(file));
+    }
+  };
+
+  // Manejadores para Drag & Drop de Imágenes
+  const handleDragEnter = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current += 1;
+    if (e.dataTransfer?.items && e.dataTransfer.items.length > 0) {
+      setIsDragging(true);
+    }
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
+      setIsDragging(false);
+    }
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current = 0;
+    setIsDragging(false);
+
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) {
+      const file = files[0];
+      if (!file.type.startsWith('image/')) {
+        alert('Por favor arrastra únicamente un archivo de imagen (JPG, PNG, WEBP, etc.)');
+        return;
+      }
+      if (file.size > 10 * 1024 * 1024) {
+        alert('La imagen debe pesar menos de 10MB');
+        return;
+      }
+      setSelectedImage(file);
+      setImagePreview(URL.createObjectURL(file));
+    }
+  };
+
+  // Manejador para pegar imagen desde portapapeles (Ctrl + V)
+  const handlePaste = (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.startsWith('image/')) {
+        const file = items[i].getAsFile();
+        if (file) {
+          if (file.size > 10 * 1024 * 1024) {
+            alert('La imagen del portapapeles excede los 10MB');
+            return;
+          }
+          setSelectedImage(file);
+          setImagePreview(URL.createObjectURL(file));
+          e.preventDefault();
+          break;
+        }
+      }
     }
   };
 
@@ -350,7 +420,27 @@ export default function AssistantChatView({ user, onReminderUpdated }) {
   ];
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col w-full overflow-hidden pb-[78px]">
+    <div 
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className="relative flex-1 min-h-0 flex flex-col w-full overflow-hidden pb-[78px] md:pb-2"
+    >
+      {/* Overlay Drag & Drop para imágenes */}
+      {isDragging && (
+        <div className="absolute inset-0 z-50 bg-[#F8FAFC]/90 dark:bg-[#121212]/90 backdrop-blur-xs flex flex-col items-center justify-center border-3 border-dashed border-[#9AC31C] rounded-2xl m-2 pointer-events-none transition-all">
+          <div className="w-16 h-16 rounded-2xl bg-[#9AC31C]/20 border border-[#9AC31C]/40 flex items-center justify-center text-[#6B8A0E] dark:text-[#9AC31C] mb-3 animate-bounce">
+            <ImageIcon className="w-8 h-8 stroke-[2.2]" />
+          </div>
+          <p className="text-base font-extrabold text-slate-900 dark:text-neutral-100">
+            Suelta tu imagen aquí
+          </p>
+          <p className="text-xs text-slate-500 dark:text-neutral-400 mt-1">
+            Se adjuntará como captura o foto para el Asistente IA
+          </p>
+        </div>
+      )}
       
       {/* Barra Superior del Asistente (Compacta) */}
       <div className="shrink-0 py-1.5 px-3 bg-white/85 dark:bg-neutral-900/85 backdrop-blur-md border border-slate-200/70 dark:border-neutral-800 rounded-xl flex items-center justify-between shadow-xs mb-1.5">
@@ -394,7 +484,7 @@ export default function AssistantChatView({ user, onReminderUpdated }) {
                 className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} animate-in fade-in duration-200`}
               >
                 <div
-                  className={`max-w-[88%] sm:max-w-[85%] rounded-2xl p-3.5 shadow-xs ${
+                  className={`max-w-[88%] md:max-w-2xl lg:max-w-3xl rounded-2xl p-3.5 shadow-xs ${
                     isUser
                       ? 'bg-neutral-900 text-white dark:bg-neutral-800 rounded-br-xs'
                       : 'bg-white dark:bg-neutral-850 text-slate-800 dark:text-neutral-100 border border-slate-200/80 dark:border-neutral-700/80 rounded-bl-xs'
@@ -459,12 +549,12 @@ export default function AssistantChatView({ user, onReminderUpdated }) {
 
       {/* Sugerencias Rápidas de Consulta */}
       {messages.length <= 4 && !loading && (
-        <div className="shrink-0 py-1 flex gap-1.5 overflow-x-auto no-scrollbar">
+        <div className="shrink-0 py-1 flex flex-wrap sm:grid sm:grid-cols-3 gap-1.5 overflow-x-auto no-scrollbar">
           {quickActions.map((action, idx) => (
             <button
               key={idx}
               onClick={() => handleSendMessage(action)}
-              className="whitespace-nowrap px-2.5 py-1 rounded-full bg-slate-100 dark:bg-neutral-800 hover:bg-[#9AC31C]/20 border border-slate-200 dark:border-neutral-700 text-[11px] text-slate-700 dark:text-neutral-300 font-medium transition-colors shrink-0"
+              className="text-center truncate px-2.5 py-1.5 rounded-full bg-slate-100 dark:bg-neutral-800 hover:bg-[#9AC31C]/20 border border-slate-200 dark:border-neutral-700 text-[11px] text-slate-700 dark:text-neutral-300 font-medium transition-colors"
             >
               {action}
             </button>
@@ -545,6 +635,7 @@ export default function AssistantChatView({ user, onReminderUpdated }) {
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
+                onPaste={handlePaste}
                 placeholder="Pregúntale al asistente comercial..."
                 disabled={loading}
                 className="flex-1 min-w-0 py-1.5 px-2 bg-transparent text-xs sm:text-sm text-slate-800 dark:text-neutral-100 placeholder-slate-400 dark:placeholder-neutral-500 focus:outline-none"

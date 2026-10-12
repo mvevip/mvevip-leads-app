@@ -142,7 +142,7 @@ export default function AdminUserManagementModal({ isOpen, onClose, onUserUpdate
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/50 backdrop-blur-xs p-3">
-      <div className="bg-white w-full max-w-lg rounded-3xl p-5 shadow-2xl border border-slate-100 max-h-[90vh] flex flex-col animate-in fade-in">
+      <div className="bg-white dark:bg-neutral-850 w-full max-w-lg md:max-w-2xl rounded-3xl p-5 shadow-2xl border border-slate-100 dark:border-neutral-750 max-h-[90vh] flex flex-col animate-in fade-in">
         
         {/* Cabecera */}
         <div className="flex justify-between items-center pb-3 border-b border-slate-100 shrink-0">

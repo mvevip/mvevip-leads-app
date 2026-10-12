@@ -3,7 +3,7 @@ import { Sparkles, Calendar, Bell, User } from 'lucide-react';
 
 export default function BottomNav({ activeTab, onTabChange, unreadCount = 0 }) {
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-30 max-w-md mx-auto px-4 pb-3 pointer-events-none">
+    <div className="md:hidden fixed bottom-0 left-0 right-0 z-30 max-w-md mx-auto px-4 pb-3 pointer-events-none">
       <nav className="relative bg-white/95 dark:bg-neutral-900/95 backdrop-blur-md rounded-3xl h-16 px-4 flex items-center justify-around bottom-nav-shadow border border-slate-200/80 dark:border-neutral-800 pointer-events-auto">
         
         {/* Tab 1: Asistente IA Comercial (Home) */}
