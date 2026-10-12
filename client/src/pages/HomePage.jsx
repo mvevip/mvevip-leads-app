@@ -240,7 +240,15 @@ export default function HomePage() {
 
           {/* VISTA UNIFICADA EN DESKTOP (lg: >= 1024px) */}
           <div className="hidden lg:flex flex-1 min-h-0 w-full max-w-7xl mx-auto px-6 lg:px-8 pb-3 gap-5 overflow-hidden">
-            {/* Panel Izquierdo: Calendario & Agenda Completa */}
+            {/* Panel Izquierdo: Chatbot Asistente IA Permanente */}
+            <div className="w-[48%] xl:w-[46%] h-full flex flex-col min-h-0 bg-white/95 dark:bg-neutral-850/95 backdrop-blur-md rounded-3xl border border-slate-200/80 dark:border-neutral-800 shadow-xs p-3 overflow-hidden">
+              <AssistantChatView
+                user={user}
+                onReminderUpdated={fetchReminders}
+              />
+            </div>
+
+            {/* Panel Derecho: Calendario & Agenda Completa */}
             <div className="w-[52%] xl:w-[54%] h-full flex flex-col min-h-0 bg-white/80 dark:bg-neutral-850/80 backdrop-blur-md rounded-3xl border border-slate-200/80 dark:border-neutral-800 shadow-xs p-4 overflow-y-auto no-scrollbar">
               <CalendarAgendaView
                 currentUser={user}
@@ -254,14 +262,6 @@ export default function HomePage() {
                 onSelectedUserIdsChange={setSelectedUserIds}
                 onSelectReminder={setSelectedReminder}
                 isDualPane={true}
-              />
-            </div>
-
-            {/* Panel Derecho: Chatbot Asistente IA Permanente */}
-            <div className="w-[48%] xl:w-[46%] h-full flex flex-col min-h-0 bg-white/95 dark:bg-neutral-850/95 backdrop-blur-md rounded-3xl border border-slate-200/80 dark:border-neutral-800 shadow-xs p-3 overflow-hidden">
-              <AssistantChatView
-                user={user}
-                onReminderUpdated={fetchReminders}
               />
             </div>
           </div>
