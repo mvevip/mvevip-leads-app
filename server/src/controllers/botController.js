@@ -72,7 +72,7 @@ const handleConversationTurn = async (req, res) => {
       take: 12
     });
     // Reordenar ascendente para el modelo
-    const history = dbHistory.reverse().map(m => ({
+    const history = dbHistory.reverse().filter(m => m.content && m.content.trim()).map(m => ({
       role: m.role,
       content: m.content
     }));
@@ -132,7 +132,8 @@ const handleConversationTurn = async (req, res) => {
 const getChatHistory = async (req, res) => {
   try {
     const messages = await prisma.chatMessage.findMany({
-      where: { userId: req.user.id },
+      // Se omiten las respuestas del asistente vacías guardadas por un fallo anterior
+      where: { userId: req.user.id, NOT: { role: 'assistant', content: '' } },
       orderBy: { createdAt: 'asc' },
       take: 60
     });

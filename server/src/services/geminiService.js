@@ -17,10 +17,39 @@ const USER_ERROR_MESSAGES = {
   timeout: 'Tardé demasiado en responder. ¿Puedes intentarlo de nuevo?',
   overloaded: 'El asistente está con mucha demanda en este momento. Intenta de nuevo en unos segundos.',
   blocked: 'No pude procesar ese contenido. ¿Puedes reformular tu mensaje o enviar otra imagen?',
+  empty: 'No logré armar una respuesta con esa consulta. ¿Puedes reformularla o darme más detalle?',
   generic: 'Tuve un inconveniente al procesar tu solicitud. Intenta de nuevo en un momento.'
 };
 
 const WRITE_TOOLS = ['update_reminder', 'add_followup_note', 'create_reminder'];
+
+// Máximo de rondas de herramientas por turno; si el modelo sigue pidiendo herramientas, se le fuerza a responder con lo obtenido
+const MAX_TOOL_ROUNDS = 3;
+const FORCE_ANSWER_PROMPT = 'Con la información que ya obtuviste, responde ahora al usuario de forma clara y natural. No llames más herramientas.';
+
+// Los días se calculan siempre en hora de Quito (Ecuador no usa horario de verano: UTC-5 todo el año),
+// sin depender de la zona horaria del servidor
+const QUITO_UTC_OFFSET_HOURS = 5;
+
+/** Fecha (YYYY-MM-DD) de un instante en hora de Quito */
+const quitoDateString = (date) => new Date(date.getTime() - QUITO_UTC_OFFSET_HOURS * 3600 * 1000).toISOString().slice(0, 10);
+
+/** Rango [inicio, fin] de un día (YYYY-MM-DD) en hora de Quito; null si la fecha no es válida */
+const quitoDayRange = (dateString) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateString || '')) return null;
+  const start = new Date(`${dateString}T00:00:00.000-05:00`);
+  if (Number.isNaN(start.getTime())) return null;
+  return { start, end: new Date(start.getTime() + 24 * 3600 * 1000 - 1) };
+};
+
+/** Parámetros de una llamada a herramienta aptos para logs (sin nombres, teléfonos ni textos de clientes) */
+const describeToolCall = ({ tool, args = {} }) => ({
+  tool,
+  filter: args.filter,
+  dateString: args.dateString,
+  allAdvisors: args.allAdvisors,
+  hasQuery: Boolean(args.query || args.clientName)
+});
 
 /**
  * Clasifica un error del SDK de Gemini en una categoría y si vale la pena reintentar.
@@ -42,6 +71,9 @@ const classifyGeminiError = (error) => {
   if (error?.response?.promptFeedback?.blockReason || /SAFETY|blocked/i.test(error?.message || '')) {
     return { kind: 'blocked', retryable: false };
   }
+  if (error?.name === 'EmptyReplyError') {
+    return { kind: 'empty', retryable: false };
+  }
   return { kind: 'generic', retryable: false };
 };
 
@@ -51,7 +83,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * Llama a Gemini con timeout por llamada, respetando el presupuesto total del turno (deadline)
  * y con un único reintento ante 429/503 si queda tiempo suficiente.
  */
-const callGemini = async (model, contents, deadline, logContext) => {
+const callGemini = async (model, contents, deadline, logContext, extraRequest = {}) => {
   let retried = false;
 
   while (true) {
@@ -63,7 +95,7 @@ const callGemini = async (model, contents, deadline, logContext) => {
     }
 
     try {
-      return await model.generateContent({ contents }, { timeout: Math.min(CALL_TIMEOUT_MS, remaining) });
+      return await model.generateContent({ contents, ...extraRequest }, { timeout: Math.min(CALL_TIMEOUT_MS, remaining) });
     } catch (error) {
       const { kind, retryable } = classifyGeminiError(error);
       const canRetry = retryable && !retried && (deadline - Date.now()) > RETRY_MIN_REMAINING_MS;
@@ -338,26 +370,19 @@ async function executeTool(toolName, args, user, referenceDate) {
       const assignedFilter = await resolveAssignedFilter();
       let where = { ...assignedFilter };
 
-      const startOfDay = new Date(referenceDate);
-      startOfDay.setHours(0, 0, 0, 0);
-      const endOfDay = new Date(referenceDate);
-      endOfDay.setHours(23, 59, 59, 999);
+      const todayRange = quitoDayRange(quitoDateString(referenceDate));
 
       if (filter === 'today') {
-        where.scheduledAt = { gte: startOfDay, lte: endOfDay };
+        where.scheduledAt = { gte: todayRange.start, lte: todayRange.end };
       } else if (filter === 'pending_all') {
         where.status = 'PENDING';
       } else if (filter === 'completed') {
         where.status = 'COMPLETED';
       }
 
-      if (args.dateString) {
-        const targetDate = new Date(args.dateString + 'T00:00:00.000Z');
-        const startTarget = new Date(targetDate);
-        startTarget.setHours(0, 0, 0, 0);
-        const endTarget = new Date(targetDate);
-        endTarget.setHours(23, 59, 59, 999);
-        where.scheduledAt = { gte: startTarget, lte: endTarget };
+      const targetRange = quitoDayRange(args.dateString);
+      if (targetRange) {
+        where.scheduledAt = { gte: targetRange.start, lte: targetRange.end };
       }
 
       const reminders = await prisma.reminder.findMany({
@@ -681,7 +706,7 @@ const processAssistantTurn = async (user, history = [], newMessage = '', fileBuf
 
     // 2. Bucle de ejecución de herramientas (soporta hasta 3 llamadas encadenadas)
     let turns = 0;
-    while (functionCalls && functionCalls.length > 0 && turns < 3) {
+    while (functionCalls && functionCalls.length > 0 && turns < MAX_TOOL_ROUNDS) {
       turns++;
       contents.push(response.response.candidates[0].content);
 
@@ -718,13 +743,36 @@ const processAssistantTurn = async (user, history = [], newMessage = '', fileBuf
       functionCalls = response.response.functionCalls();
     }
 
-    const replyText = response.response.text();
+    let replyText = response.response.text();
+
+    // Sin texto (el modelo agotó las rondas pidiendo más herramientas, o respondió vacío): se le pide una última
+    // respuesta sin herramientas con lo ya obtenido. Nunca se entrega ni se guarda una respuesta vacía.
+    let forcedAnswer = false;
+    if (!replyText || !replyText.trim()) {
+      forcedAnswer = true;
+      geminiCalls++;
+      const forced = await callGemini(
+        model,
+        [...contents, { role: 'user', parts: [{ text: FORCE_ANSWER_PROMPT }] }],
+        deadline,
+        logContext,
+        { toolConfig: { functionCallingConfig: { mode: 'NONE' } } }
+      );
+      replyText = forced.response.text();
+      if (!replyText || !replyText.trim()) {
+        const emptyError = new Error('El modelo no devolvió texto de respuesta');
+        emptyError.name = 'EmptyReplyError';
+        throw emptyError;
+      }
+    }
 
     logInfo('assistant_turn', {
       ...logContext,
       durationMs: Date.now() - startedAt,
       geminiCalls,
+      forcedAnswer,
       tools: executedActions.map((a) => a.tool),
+      calls: executedActions.map(describeToolCall),
       hasFile: Boolean(fileBuffer)
     });
 
@@ -740,7 +788,8 @@ const processAssistantTurn = async (user, history = [], newMessage = '', fileBuf
       kind,
       durationMs: Date.now() - startedAt,
       geminiCalls,
-      tools: executedActions.map((a) => a.tool)
+      tools: executedActions.map((a) => a.tool),
+      calls: executedActions.map(describeToolCall)
     });
 
     // Si ya se ejecutó alguna escritura exitosa antes del fallo, no se pierde: se avisa y se devuelven las acciones para refrescar la agenda
