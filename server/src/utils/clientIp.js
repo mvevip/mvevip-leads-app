@@ -1,27 +1,14 @@
 const { getSourceIp } = require('./requestContext');
 
 /**
- * IP del usuario detrás de CloudFront + API Gateway.
- * X-Forwarded-For llega como "[lo que envió el cliente...], IP_del_usuario[, IP_de_CloudFront]":
- * CloudFront agrega la IP real del usuario y API Gateway agrega la IP de CloudFront, así que lo que
- * el cliente falsifique queda siempre a la izquierda. Se toma la entrada anterior a la del
- * API Gateway (sourceIp) o, si API Gateway no agregó la suya, la última.
+ * IP del usuario para los límites de intentos.
+ * Se usa la IP de origen que calcula API Gateway (requestContext.http.sourceIp): detrás de CloudFront es la IP real del
+ * usuario y en una llamada directa al API Gateway es la IP de la conexión. En ambos casos el cliente no puede
+ * falsificarla (verificado en producción con X-Forwarded-For inventados).
+ * Se ignoran X-Forwarded-For (incluye entradas falsificables y IPs de servidores de CloudFront) y CloudFront-Viewer-Address
+ * (se puede falsificar llamando directo al API Gateway). Fuera de Lambda (desarrollo local) se usa la IP de la conexión.
  */
-const getClientIp = (req) => {
-  const chain = String(req.headers['x-forwarded-for'] || '')
-    .split(',')
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const gatewayIp = getSourceIp();
-
-  if (chain.length === 0) {
-    return gatewayIp || req.socket?.remoteAddress || 'unknown';
-  }
-  if (gatewayIp && chain[chain.length - 1] === gatewayIp) {
-    return chain.length >= 2 ? chain[chain.length - 2] : gatewayIp;
-  }
-  return chain[chain.length - 1];
-};
+const getClientIp = (req) => getSourceIp() || req.socket?.remoteAddress || 'unknown';
 
 module.exports = {
   getClientIp
