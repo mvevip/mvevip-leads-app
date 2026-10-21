@@ -7,9 +7,13 @@ const apiRoutes = require('./routes/api');
 const { logError, logWarn } = require('./utils/logger');
 const { getRequestId } = require('./utils/requestContext');
 const { signMediaResponses } = require('./middleware/signMedia');
+const { verifyOrigin } = require('./middleware/originVerify');
 
 const app = express();
 app.disable('x-powered-by');
+
+// Primer filtro: solo se acepta tráfico que pasó por CloudFront (cabecera secreta X-Origin-Verify)
+app.use(verifyOrigin);
 
 // Orígenes permitidos para CORS: la app en producción y el servidor de desarrollo local (configurable con CORS_ORIGINS, separado por comas)
 const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'https://leads.mvevip.com,http://localhost:6410')
