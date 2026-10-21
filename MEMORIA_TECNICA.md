@@ -33,7 +33,7 @@ flowchart TD
         CF["CloudFront E2FMW6HOSKOVMP<br/>leads.mvevip.com"]
         S3["S3 mvevip-leads<br/>frontend + uploads/ (privado)"]
         APIGW["API Gateway HTTP da0g0024hf<br/>límites por ruta"]
-        Lambda["Lambda mvevip-lead-api<br/>Node 20 · concurrencia reservada 25"]
+        Lambda["Lambda mvevip-lead-api<br/>Node 24 · concurrencia reservada 25"]
         EB["EventBridge<br/>rate(1 minute)"]
         RDS["RDS MySQL database-mvevip<br/>esquema mvevip_lead"]
         CW["CloudWatch Logs<br/>retención 30 días"]
@@ -70,7 +70,7 @@ Todos los comandos usan el perfil de AWS CLI `marketingvip` y la región `us-wes
 | **CloudFront Function** | `MarketingVIP-Router-us-west-2` | Compartida con otros proyectos (rutas `/pantalla`, `/admin`); reescribe rutas sin extensión a `/index.html` |
 | **S3** | `mvevip-leads` | Acceso público bloqueado. Prefijos: `assets/`, `icons/`, `deployments/` (zips de la Lambda y `backup/`), `uploads/` (privado) |
 | **API Gateway** | HTTP API `mvevip-lead-api-gw` (`da0g0024hf`) | Etapa `$default` con despliegue automático. Integración `qxqhxp8` (AWS_PROXY v2, 30 s) |
-| **Lambda** | `mvevip-lead-api` | Node.js 20.x · 512 MB · 30 s · x86_64 · handler `lambda.handler` · sin VPC · **concurrencia reservada: 25** |
+| **Lambda** | `mvevip-lead-api` | **Node.js 24.x** (desde el 21-oct-2026; antes 20.x) · 512 MB · 30 s · x86_64 · handler `lambda.handler` · sin VPC · **concurrencia reservada: 25** |
 | **Rol de la Lambda** | `mvevip-api-leads-role-brclsbmj` | **Compartido** con la función `mvevip-api-leads` (otro sistema). Tiene `AmazonS3FullAccess` y la política inline `MvevipLeadApiLogs` |
 | **Logs** | `/aws/lambda/mvevip-lead-api` | Retención de 30 días |
 | **EventBridge** | regla `mvevip-lead-cron-rule` | `rate(1 minute)` → Lambda con `{"action":"cron"}` |
@@ -144,7 +144,7 @@ mvevip_lead_app/
     └── eventbridge-targets.json
 ```
 
-**Stack real:** React 19, Vite 6, Tailwind 4, Axios, date-fns, lucide-react · Node 20, Express 4, Prisma 6.19 (MySQL), `@google/generative-ai` 0.24, `@codegenie/serverless-express`, `web-push`, `bcryptjs`, `jsonwebtoken`, `multer`, AWS SDK v3 (`client-s3`, `s3-request-presigner`). `node-cron` solo se usa en local; en producción el cron lo dispara EventBridge.
+**Stack real:** React 19, Vite 6, Tailwind 4, Axios, date-fns, lucide-react · Node 24 en Lambda (los contenedores locales aún usan Node 20, ver 11.1), Express 4, Prisma 6.19 (MySQL), `@google/generative-ai` 0.24, `@codegenie/serverless-express`, `web-push`, `bcryptjs`, `jsonwebtoken`, `multer`, AWS SDK v3 (`client-s3`, `s3-request-presigner`). `node-cron` solo se usa en local; en producción el cron lo dispara EventBridge.
 
 ### 4.1. API
 
@@ -350,6 +350,9 @@ El repositorio **no tiene pruebas automatizadas**. Durante la sesión del 21-oct
 | `09310e1` / `9dfed1a` | Límite de intentos, sesiones revocables, CORS, cabeceras, tamaños, contraseñas; corrección de la IP detectada |
 | `be72b84` / `006f9a5` | Verificación de origen CloudFront → API Gateway |
 | `8cc1f94` | Asistente sin respuestas vacías, fechas en hora de Quito, historial sin mensajes vacíos |
+| `25db1c2` / `90a9582` | Documentación; el empaquetado de la Lambda verifica el contenido del zip; revisión de compatibilidad con Node 22/24 |
+
+**Runtime:** la Lambda pasó de `nodejs20.x` a `nodejs24.x` (cambio solo de configuración, sin redeploy de código).
 
 **Cambios en AWS y en la base de datos:** log group con retención de 30 días y permiso de logs en el rol; usuario IAM `mvevip-leads-media-signer`; variables de entorno nuevas; política del bucket con `Deny` a `uploads/*`; invalidación de `/uploads/*`; header `X-Origin-Verify` en `ApiGatewayOrigin`; 3 rutas con límites en el API Gateway; concurrencia reservada de 25; migración SQL 001.
 
@@ -360,7 +363,7 @@ El repositorio **no tiene pruebas automatizadas**. Durante la sesión del 21-oct
 ### 11.1. Pendientes, por prioridad
 | # | Pendiente | Detalle |
 |---|---|---|
-| 1 | **Runtime Node 20 → 24** | `nodejs20.x` **ya está deprecado** (30-abr-2026): AWS puede dejar de aplicarle parches de seguridad y la función no tiene soporte técnico. Hitos oficiales: bloqueo de creación de funciones el 29-jul-2027 y **bloqueo de actualizaciones el 31-ago-2027** (después no se podría ni corregir un error). El SDK de AWS v3 exigirá Node 22 desde la primera semana de enero de 2027 (afecta solo a actualizaciones futuras del SDK). Se recomienda **Node 24** (soportado hasta el 30-abr-2028); `nodejs22.x` se deprecaría el 30-abr-2027. La cuenta ya tiene 12 funciones en Node 24 y 6 en Node 22. Revisión de compatibilidad hecha el 21-oct-2026: ver 11.3 |
+| 1 | **Runtime Node 24: hecho en producción (21-oct-2026). Falta alinear los contenedores locales** | `server/Dockerfile` y `client/Dockerfile` siguen en `node:20-alpine`: pasarlos a `node:24-alpine` y recrear el volumen de `node_modules` (`docker compose up -d --build -V`). Contexto: `nodejs20.x` **ya estaba deprecado** (30-abr-2026): AWS puede dejar de aplicarle parches de seguridad y la función no tiene soporte técnico. Hitos oficiales: bloqueo de creación de funciones el 29-jul-2027 y **bloqueo de actualizaciones el 31-ago-2027** (después no se podría ni corregir un error). El SDK de AWS v3 exigirá Node 22 desde la primera semana de enero de 2027 (afecta solo a actualizaciones futuras del SDK). Se recomienda **Node 24** (soportado hasta el 30-abr-2028); `nodejs22.x` se deprecaría el 30-abr-2027. La cuenta ya tiene 12 funciones en Node 24 y 6 en Node 22. Revisión de compatibilidad hecha el 21-oct-2026: ver 11.3 |
 | 2 | **403 y 404 del API llegan como HTML con 200** | CloudFront tiene respuestas de error personalizadas (403/404 → `index.html`) que aplican también a `/api/*`. Afecta, por ejemplo, a los mensajes "No autorizado". Corregir con cuidado: la CloudFront Function es compartida |
 | 3 | **Rol compartido con `AmazonS3FullAccess`** | Crear un rol propio para esta función con acceso solo a `uploads/*` |
 | 4 | **Alarmas y logs de acceso** | Alarmas de `Errors`, 5xx y `Duration`; logs de acceso del API Gateway |
@@ -384,7 +387,7 @@ El repositorio **no tiene pruebas automatizadas**. Durante la sesión del 21-oct
 - La batería de pruebas locales (cron, asistente, errores, seguridad, origen, imágenes) pasa completa bajo Node 22 y 24, y la firma SigV4 de las URLs coincide con la implementación independiente. No aparece ninguna advertencia de deprecación al cargar la app.
 - El frontend compila con Vite 6 bajo Node 24.
 - `server/Dockerfile` y `client/Dockerfile` usan `node:20-alpine`: alinear con la versión elegida (y recrear el volumen anónimo de `node_modules`).
-- **No verificado:** el comportamiento dentro del runtime real de Lambda con Node 24 (arranque en frío, motor de Prisma sobre Amazon Linux 2023, conexión al RDS). Se comprueba en el propio cambio con reversión inmediata.
+- **Cambio aplicado en producción el 21-oct-2026 (21:55 UTC)** con `aws lambda update-function-configuration --runtime nodejs24.x` (solo cambia el runtime: las variables de entorno y el código no se tocan). Verificado después del cambio: arranque con `nodejs:24.mainline`, `Init Duration` de ~725 ms (antes 580 a 710 ms), login inválido por CloudFront (Prisma y RDS operativos), cron cada minuto, acceso directo al API Gateway rechazado, sin la advertencia del SDK de AWS y sin errores ni throttles. **Reversión:** `aws lambda update-function-configuration --function-name mvevip-lead-api --runtime nodejs20.x` (AWS permite volver a Node 20 hasta el 31-ago-2027).
 
 ### 11.4. Limitaciones conocidas
 - La app no funciona sin conexión (el Service Worker no guarda en caché).

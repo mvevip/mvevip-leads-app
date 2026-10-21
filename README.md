@@ -37,7 +37,7 @@ Aplicación Web Progresiva (PWA) para la fuerza comercial de MVEVIP. Integra la 
 | Capa | Tecnologías |
 |---|---|
 | **Frontend** | React 19, Vite 6, Tailwind CSS 4, Axios, date-fns, Lucide Icons |
-| **Backend** | Node.js 20, Express 4, `@google/generative-ai`, `web-push`, `@codegenie/serverless-express`, bcryptjs, JWT |
+| **Backend** | Node.js 24 (Lambda), Express 4, `@google/generative-ai`, `web-push`, `@codegenie/serverless-express`, bcryptjs, JWT |
 | **Base de datos** | MySQL 8, Prisma ORM (más consultas SQL directas para los contadores de límites y la versión de sesión) |
 | **Infraestructura cloud** | AWS S3, CloudFront, API Gateway (HTTP), Lambda, RDS MySQL, EventBridge, CloudWatch Logs |
 | **Contenedores (local)** | Docker y Docker Compose (puertos 6410, 6411 y 6412) |
