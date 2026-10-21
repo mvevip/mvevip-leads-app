@@ -1,6 +1,8 @@
 -- ==============================================================================
 -- MVEVIP LEAD MANAGEMENT APP - ESQUEMA DE PRODUCCIÓN MYSQL
 -- Servidor Recomendado: database-mvevip.c98k2yme6fe6.us-west-2.rds.amazonaws.com
+-- Sincronizado con la base de producción (esquema mvevip_lead) al 2026-10-21.
+-- Los cambios posteriores se registran como scripts numerados en deploy/migrations/.
 -- ==============================================================================
 
 CREATE DATABASE IF NOT EXISTS `mvevip_lead` 
@@ -21,6 +23,7 @@ CREATE TABLE IF NOT EXISTS `users` (
   `isActive` BOOLEAN NOT NULL DEFAULT TRUE,
   `mustChangePassword` BOOLEAN NOT NULL DEFAULT FALSE,
   `isFirstLogin` BOOLEAN NOT NULL DEFAULT TRUE,
+  `tokenVersion` INT NOT NULL DEFAULT 0,
   `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updatedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
@@ -98,6 +101,29 @@ CREATE TABLE IF NOT EXISTS `reminder_tags` (
   PRIMARY KEY (`reminderId`, `tagId`),
   CONSTRAINT `reminder_tags_reminderId_fkey` FOREIGN KEY (`reminderId`) REFERENCES `reminders` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
   CONSTRAINT `reminder_tags_tagId_fkey` FOREIGN KEY (`tagId`) REFERENCES `tags` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 7. Historial del chat con el Asistente IA (por usuario)
+CREATE TABLE IF NOT EXISTS `chat_messages` (
+  `id` VARCHAR(191) NOT NULL,
+  `userId` VARCHAR(191) NOT NULL,
+  `role` VARCHAR(191) NOT NULL,
+  `content` LONGTEXT NOT NULL,
+  `mediaUrl` LONGTEXT NULL,
+  `metadata` JSON NULL,
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  KEY `idx_user_created` (`userId`, `createdAt`),
+  CONSTRAINT `chat_messages_ibfk_1` FOREIGN KEY (`userId`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 8. Contadores del límite de intentos (login y asistente). `bucket` es un hash SHA-256; se purga cada hora (> 24 h)
+CREATE TABLE IF NOT EXISTS `rate_limit_events` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `bucket` VARCHAR(191) NOT NULL,
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  KEY `rate_limit_events_bucket_createdAt_idx` (`bucket`, `createdAt`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ==============================================================================
