@@ -4,6 +4,26 @@ const prisma = new PrismaClient();
 const { uploadToS3 } = require('../services/s3Service');
 const { logError } = require('../utils/logger');
 const { getRequestId } = require('../utils/requestContext');
+const { hashKey, countEvents, recordEvent } = require('../utils/rateLimit');
+
+// Límite de mensajes al asistente por usuario (protege la cuota de Gemini)
+const BOT_WINDOW_MS = 60 * 1000;
+const BOT_MAX_MESSAGES_PER_WINDOW = 15;
+
+// Respuesta de error que el frontend muestra como un mensaje más del asistente (no se guarda en el historial)
+const buildErrorReply = (content, actions = []) => ({
+  success: true,
+  data: {
+    id: `err-${Date.now()}`,
+    role: 'assistant',
+    content,
+    mediaUrl: null,
+    images: [],
+    actions,
+    isError: true,
+    createdAt: new Date()
+  }
+});
 
 /**
  * Endpoint conversacional multi-turno con el Asistente IA permanente
@@ -18,6 +38,12 @@ const handleConversationTurn = async (req, res) => {
     if (!message && !fileBuffer) {
       return res.status(400).json({ error: 'Debes enviar un mensaje, nota de voz o imagen.' });
     }
+
+    const botBucket = hashKey('bot', user.id);
+    if (await countEvents(botBucket, BOT_WINDOW_MS) >= BOT_MAX_MESSAGES_PER_WINDOW) {
+      return res.json(buildErrorReply('Estás enviando mensajes muy rápido. Espera unos segundos e inténtalo de nuevo.'));
+    }
+    await recordEvent(botBucket);
 
     // 1. Si adjuntó archivo, guardar en S3 o generar data URI
     let userMediaUrl = null;
@@ -64,19 +90,7 @@ const handleConversationTurn = async (req, res) => {
     // Si el turno falló, se responde con un mensaje amable pero NO se guarda en el historial
     // (evita contaminar el contexto que se reenvía a Gemini en los siguientes turnos)
     if (turnResult.isError) {
-      return res.json({
-        success: true,
-        data: {
-          id: `err-${Date.now()}`,
-          role: 'assistant',
-          content: turnResult.reply,
-          mediaUrl: null,
-          images: [],
-          actions: turnResult.actions || [],
-          isError: true,
-          createdAt: new Date()
-        }
-      });
+      return res.json(buildErrorReply(turnResult.reply, turnResult.actions || []));
     }
 
     // 5. Determinar mediaUrl del bot si devolvió imágenes de leads consultados

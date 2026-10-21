@@ -3,36 +3,68 @@ const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_mvevip_lead';
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '5d';
+const { JWT_SECRET, JWT_EXPIRES_IN } = require('../utils/jwtConfig');
+const { getTokenVersion } = require('../utils/sessionVersion');
+const { validatePassword } = require('../utils/passwords');
+const { hashKey, countEvents, recordEvent, clearEvents } = require('../utils/rateLimit');
+const { getClientIp } = require('../utils/clientIp');
+const { logWarn } = require('../utils/logger');
+
+// Límite de intentos fallidos de login: por correo + IP, y un tope general por IP (holgado, contra barridos de correos)
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_FAILURES_PER_EMAIL = 5;
+const LOGIN_MAX_FAILURES_PER_IP = 50;
+
+// Hash válido de una contraseña aleatoria: se compara cuando el correo no existe para que el tiempo de respuesta
+// no revele si el usuario existe
+const DUMMY_PASSWORD_HASH = '$2b$10$1oarJf28zxP5E.dALcJJUu/3alur/V3GFQRhiYgTmPheF8R0TOQHa';
 
 const login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    if (!email || !password) {
+    if (!email || !password || typeof email !== 'string' || typeof password !== 'string') {
       return res.status(400).json({ error: 'Email y contraseña requeridos' });
     }
 
+    const normalizedEmail = email.toLowerCase().trim();
+    const clientIp = getClientIp(req);
+    const emailBucket = hashKey('login', normalizedEmail, clientIp);
+    const ipBucket = hashKey('login-ip', clientIp);
+
+    const [emailFailures, ipFailures] = await Promise.all([
+      countEvents(emailBucket, LOGIN_WINDOW_MS),
+      countEvents(ipBucket, LOGIN_WINDOW_MS)
+    ]);
+    if (emailFailures >= LOGIN_MAX_FAILURES_PER_EMAIL || ipFailures >= LOGIN_MAX_FAILURES_PER_IP) {
+      logWarn('login_rate_limited', { ip: clientIp, emailFailures, ipFailures });
+      res.set('Retry-After', String(LOGIN_WINDOW_MS / 1000));
+      return res.status(429).json({ error: 'Demasiados intentos fallidos. Espera 15 minutos e inténtalo de nuevo.' });
+    }
+
     const user = await prisma.user.findUnique({
-      where: { email: email.toLowerCase().trim() }
+      where: { email: normalizedEmail }
     });
 
-    if (!user) {
+    const isMatch = await bcrypt.compare(password, user ? user.passwordHash : DUMMY_PASSWORD_HASH);
+    if (!user || !isMatch) {
+      await recordEvent(emailBucket, ipBucket);
+      logWarn('login_failed', { ip: clientIp });
       return res.status(401).json({ error: 'Credenciales inválidas' });
     }
 
+    // La cuenta deshabilitada se informa solo con la contraseña correcta (no se revela a quien no la conoce)
     if (!user.isActive) {
       return res.status(403).json({ error: 'Esta cuenta ha sido deshabilitada por el administrador.' });
     }
 
-    const isMatch = await bcrypt.compare(password, user.passwordHash);
-    if (!isMatch) {
-      return res.status(401).json({ error: 'Credenciales inválidas' });
+    if (emailFailures > 0) {
+      await clearEvents(emailBucket);
     }
 
+    const tokenVersion = (await getTokenVersion(user.id, { fresh: true })) ?? 0;
     const token = jwt.sign(
-      { userId: user.id, email: user.email, role: user.role },
+      { userId: user.id, email: user.email, role: user.role, tokenVersion },
       JWT_SECRET,
       { expiresIn: JWT_EXPIRES_IN }
     );
@@ -65,8 +97,9 @@ const changePassword = async (req, res) => {
   try {
     const { newPassword, avatarUrl } = req.body;
 
-    if (!newPassword || newPassword.length < 6) {
-      return res.status(400).json({ error: 'La nueva contraseña debe tener al menos 6 caracteres' });
+    const passwordError = validatePassword(newPassword);
+    if (passwordError) {
+      return res.status(400).json({ error: passwordError });
     }
 
     const passwordHash = await bcrypt.hash(newPassword, 10);

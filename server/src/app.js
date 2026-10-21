@@ -9,16 +9,40 @@ const { getRequestId } = require('./utils/requestContext');
 const { signMediaResponses } = require('./middleware/signMedia');
 
 const app = express();
+app.disable('x-powered-by');
+
+// Orígenes permitidos para CORS: la app en producción y el servidor de desarrollo local (configurable con CORS_ORIGINS, separado por comas)
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'https://leads.mvevip.com,http://localhost:6410')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
 // Middlewares globales
 app.use(cors({
-  origin: '*',
+  // Las peticiones sin Origin (misma origen, curl, servidor a servidor) pasan; las de otros sitios web se bloquean en el navegador
+  origin: (origin, callback) => callback(null, !origin || ALLOWED_ORIGINS.includes(origin)),
   methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-app.use(express.json({ limit: '20mb' }));
-app.use(express.urlencoded({ extended: true, limit: '20mb' }));
+// Cabeceras de seguridad de la API (las respuestas de la API son JSON y nunca deben guardarse en caché)
+app.use((req, res, next) => {
+  res.set({
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer',
+    'Cache-Control': 'no-store'
+  });
+  next();
+});
+
+// Límites de tamaño del cuerpo JSON: 100 KB por defecto; solo las rutas que reciben imágenes en base64 admiten hasta 6 MB
+// (límite real de una invocación de Lambda). El primer parser que procesa la petición es el que aplica.
+const largeJson = express.json({ limit: '6mb' });
+app.use('/api/auth/avatar', largeJson);
+app.use('/api/auth/change-password', largeJson);
+app.post('/api/admin/users', largeJson);
+app.use(express.json({ limit: '100kb' }));
+app.use(express.urlencoded({ extended: true, limit: '100kb' }));
 
 // Firma las URLs de archivos subidos (avatarUrl, mediaUrl, images) en todas las respuestas JSON
 app.use(signMediaResponses);

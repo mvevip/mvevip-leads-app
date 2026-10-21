@@ -1,6 +1,7 @@
 const cron = require('node-cron');
 const { PrismaClient } = require('@prisma/client');
 const { sendPushToUser } = require('./webPushService');
+const { purgeOldEvents } = require('../utils/rateLimit');
 
 const prisma = new PrismaClient();
 
@@ -82,6 +83,12 @@ const checkAndNotifyDueReminders = async () => {
 
       results.push({ reminderId: reminder.id, delivered, result });
     }
+
+    // Una vez por hora se eliminan los eventos de más de 24 h de la tabla del limitador de intentos
+    if (now.getUTCMinutes() === 0) {
+      await purgeOldEvents(24 * 60 * 60 * 1000);
+    }
+
     return { count: dueReminders.length, results };
   } catch (err) {
     console.error('Error en ejecución del Cron Scheduler:', err);

@@ -1,12 +1,13 @@
 const serverlessExpress = require('@codegenie/serverless-express');
 const app = require('./src/app');
 const { checkAndNotifyDueReminders } = require('./src/services/cronScheduler');
-const { setRequestId } = require('./src/utils/requestContext');
+const { setRequestId, setSourceIp } = require('./src/utils/requestContext');
 
 const serverlessHandler = serverlessExpress({ app });
 
 exports.handler = async (event, context) => {
   setRequestId(context.awsRequestId);
+  setSourceIp(event?.requestContext?.http?.sourceIp);
 
   // Invocación por EventBridge Scheduled Rule (Cron cada 1 minuto)
   if (event.source === 'aws.events' || event['detail-type'] === 'Scheduled Event' || event.action === 'cron') {

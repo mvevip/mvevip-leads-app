@@ -12,6 +12,7 @@ const botController = require('../controllers/botController');
 const adminController = require('../controllers/adminController');
 const pushController = require('../controllers/pushController');
 const { logError } = require('../utils/logger');
+const { requireCronSecret } = require('../middleware/cronAuth');
 
 // Multer en memoria para audio e imágenes
 const upload = multer({
@@ -49,7 +50,7 @@ router.post('/push/unsubscribe', authMiddleware, pushController.unsubscribe);
 router.post('/push/test', authMiddleware, pushController.sendTestNotification);
 
 // Ruta de Despacho Cron de Recordatorios (Invocada por EventBridge o llamada directa)
-router.get('/cron/check-reminders', async (req, res) => {
+router.get('/cron/check-reminders', requireCronSecret, async (req, res) => {
   try {
     const { checkAndNotifyDueReminders } = require('../services/cronScheduler');
     const result = await checkAndNotifyDueReminders();

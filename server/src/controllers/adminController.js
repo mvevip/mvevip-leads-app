@@ -3,6 +3,8 @@ const prisma = new PrismaClient();
 const bcrypt = require('bcryptjs');
 const { sendBroadcastPush, sendPushToUser } = require('../services/webPushService');
 const { normalizeMediaUrl } = require('../services/s3Service');
+const { validatePassword, generateTempPassword } = require('../utils/passwords');
+const { bumpTokenVersion } = require('../utils/sessionVersion');
 
 /**
  * Listar todos los usuarios / asesores (con soporte para filtro active/inactive)
@@ -52,6 +54,11 @@ const createUser = async (req, res) => {
 
     if (!name || !email || !password) {
       return res.status(400).json({ error: 'Nombre, correo electrónico y contraseña inicial son obligatorios' });
+    }
+
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+      return res.status(400).json({ error: passwordError });
     }
 
     const existing = await prisma.user.findUnique({
@@ -150,8 +157,14 @@ const resetUserPassword = async (req, res) => {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
-    // Si no se envía contraseña, generar una aleatoria fácil de compartir
-    const generatedPass = newPassword || 'MVEVIP' + Math.floor(1000 + Math.random() * 9000);
+    // Si no se envía contraseña, generar una aleatoria (criptográficamente segura) fácil de compartir
+    if (newPassword) {
+      const passwordError = validatePassword(newPassword);
+      if (passwordError) {
+        return res.status(400).json({ error: passwordError });
+      }
+    }
+    const generatedPass = newPassword || generateTempPassword();
     const passwordHash = await bcrypt.hash(generatedPass, 10);
 
     await prisma.user.update({
@@ -161,6 +174,9 @@ const resetUserPassword = async (req, res) => {
         mustChangePassword: true // Forzar al usuario a cambiarla al entrar
       }
     });
+
+    // Cierra las sesiones abiertas de ese usuario: los tokens anteriores dejan de ser válidos
+    await bumpTokenVersion(id);
 
     return res.json({
       message: 'Contraseña reseteada con éxito',
@@ -202,7 +218,8 @@ const sendCustomNotification = async (req, res) => {
     return res.json({
       success: true,
       message: 'Notificación procesada',
-      details: result
+      sentCount: result?.sentCount ?? 0,
+      failedCount: result?.failedCount ?? 0
     });
   } catch (error) {
     console.error('Error enviando notificación administrativa:', error);
