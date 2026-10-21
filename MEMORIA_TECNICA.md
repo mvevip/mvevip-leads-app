@@ -360,7 +360,7 @@ El repositorio **no tiene pruebas automatizadas**. Durante la sesión del 21-oct
 ### 11.1. Pendientes, por prioridad
 | # | Pendiente | Detalle |
 |---|---|---|
-| 1 | **Runtime Node 20 → 22 o 24** | **Fecha límite: enero de 2027.** El SDK de AWS v3 exigirá Node 22; Node 20 está al final de su vida. Otras Lambdas de la cuenta ya usan Node 22 o 24. El paquete pesa ~66 MB (conviene empaquetar con esbuild) |
+| 1 | **Runtime Node 20 → 24** | `nodejs20.x` **ya está deprecado** (30-abr-2026): AWS puede dejar de aplicarle parches de seguridad y la función no tiene soporte técnico. Hitos oficiales: bloqueo de creación de funciones el 29-jul-2027 y **bloqueo de actualizaciones el 31-ago-2027** (después no se podría ni corregir un error). El SDK de AWS v3 exigirá Node 22 desde la primera semana de enero de 2027 (afecta solo a actualizaciones futuras del SDK). Se recomienda **Node 24** (soportado hasta el 30-abr-2028); `nodejs22.x` se deprecaría el 30-abr-2027. La cuenta ya tiene 12 funciones en Node 24 y 6 en Node 22. Revisión de compatibilidad hecha el 21-oct-2026: ver 11.3 |
 | 2 | **403 y 404 del API llegan como HTML con 200** | CloudFront tiene respuestas de error personalizadas (403/404 → `index.html`) que aplican también a `/api/*`. Afecta, por ejemplo, a los mensajes "No autorizado". Corregir con cuidado: la CloudFront Function es compartida |
 | 3 | **Rol compartido con `AmazonS3FullAccess`** | Crear un rol propio para esta función con acceso solo a `uploads/*` |
 | 4 | **Alarmas y logs de acceso** | Alarmas de `Errors`, 5xx y `Duration`; logs de acceso del API Gateway |
@@ -373,7 +373,20 @@ El repositorio **no tiene pruebas automatizadas**. Durante la sesión del 21-oct
 | 11 | **Código muerto** | `GeminiBotModal.jsx` y `ProjectCard.jsx` no se importan en ningún lugar; el valor `TRANSFERRED` del enum y las tablas de etiquetas no tienen uso; `/api/bot/conversation` duplica a `/api/bot/turn`; `vite-plugin-pwa` está instalado pero no se usa |
 | 12 | **Audio, WhatsApp, métricas en el chat, geolocalización** | Funcionalidades futuras (prioridad media a baja) |
 
-### 11.2. Limitaciones conocidas
+### 11.2. Dependencias (`npm audit`, 21-oct-2026)
+- **`multer` 1.4.5-lts.2** (carga de archivos del asistente): el registro de npm lo marca como obsoleto por vulnerabilidades corregidas en la 2.x. Pendiente de actualizar a 2.x y probar la subida de imágenes y notas de voz.
+- **3 hallazgos "high"** en `prisma`, `@prisma/config` y `deepmerge-ts`: pertenecen a la CLI de Prisma (herramienta de desarrollo), que **no se empaqueta** en la Lambda.
+- **2 "moderate"** en `node-cron` y `uuid`: `node-cron` solo se usa en desarrollo local.
+
+### 11.3. Compatibilidad con Node 22 y 24 (revisión del 21-oct-2026)
+- Los 202 paquetes del árbol de producción declaran `engines` compatibles con Node 20, 22 y 24 (0 incompatibles).
+- No hay módulos nativos propios fuera del motor de Prisma (6.19.3), que carga y ejecuta correctamente bajo Node 22.22 y 24.22 con el binario `rhel-openssl-3.0.x`. Node 20, 22 y 24 usan el mismo sistema operativo en Lambda (Amazon Linux 2023).
+- La batería de pruebas locales (cron, asistente, errores, seguridad, origen, imágenes) pasa completa bajo Node 22 y 24, y la firma SigV4 de las URLs coincide con la implementación independiente. No aparece ninguna advertencia de deprecación al cargar la app.
+- El frontend compila con Vite 6 bajo Node 24.
+- `server/Dockerfile` y `client/Dockerfile` usan `node:20-alpine`: alinear con la versión elegida (y recrear el volumen anónimo de `node_modules`).
+- **No verificado:** el comportamiento dentro del runtime real de Lambda con Node 24 (arranque en frío, motor de Prisma sobre Amazon Linux 2023, conexión al RDS). Se comprueba en el propio cambio con reversión inmediata.
+
+### 11.4. Limitaciones conocidas
 - La app no funciona sin conexión (el Service Worker no guarda en caché).
 - Las URLs de imágenes duran 24 a 25 horas: una pestaña abierta más de un día requiere recargar.
 - Los límites del API Gateway son de mejor esfuerzo; la barrera dura es la concurrencia reservada (25).
