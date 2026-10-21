@@ -11,7 +11,7 @@ const setRequestId = (id) => {
 
 const getRequestId = () => currentRequestId || crypto.randomUUID();
 
-// IP que se conectó al API Gateway (detrás de CloudFront es la del servidor de CloudFront, no la del usuario)
+// IP de origen que calcula API Gateway: detrás de CloudFront es la IP real del usuario y en una llamada directa la de la conexión
 const setSourceIp = (ip) => {
   currentSourceIp = ip || null;
 };
