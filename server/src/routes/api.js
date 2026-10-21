@@ -64,6 +64,7 @@ router.get('/cron/check-reminders', requireCronSecret, async (req, res) => {
 // Rutas de Administración (Solo ADMIN)
 router.get('/admin/users', authMiddleware, requireAdmin, adminController.getUsers);
 router.post('/admin/users', authMiddleware, requireAdmin, adminController.createUser);
+router.patch('/admin/users/:id/role', authMiddleware, requireAdmin, adminController.updateUserRole);
 router.patch('/admin/users/:id/toggle-status', authMiddleware, requireAdmin, adminController.toggleUserStatus);
 router.post('/admin/users/:id/reset-password', authMiddleware, requireAdmin, adminController.resetUserPassword);
 router.post('/admin/notifications', authMiddleware, requireAdmin, adminController.sendCustomNotification);

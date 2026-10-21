@@ -1,7 +1,7 @@
 # MEMORIA TÉCNICA - MVEVIP LEAD REMINDER & ASISTENTE IA
 
 **Proyecto:** MVEVIP Leads & Recordatorios (PWA)  
-**Versión del frontend:** 1.0.6 (el backend no tiene número de versión; ver el historial de commits)  
+**Versión del frontend:** 1.0.7 (el backend no tiene número de versión; ver el historial de commits)  
 **Dominio de producción:** [https://leads.mvevip.com](https://leads.mvevip.com)  
 **Repositorios:**  
 - Personal (respaldo y actividad): [https://github.com/caloloc2/mvevip_leads_agente](https://github.com/caloloc2/mvevip_leads_agente)  
@@ -154,7 +154,7 @@ mvevip_lead_app/
 | Recordatorios | `GET/POST /api/reminders`; `GET /api/reminders/:id`; `PATCH :id/complete`, `reopen`, `dismiss`, `transfer`; `POST :id/followups` |
 | Asistente | `GET/DELETE /api/bot/history`; `POST /api/bot/turn` (y `/api/bot/conversation`, alias) |
 | Push | `GET /api/push/public-key`; `POST subscribe`, `unsubscribe`, `test` |
-| Administración (solo ADMIN) | `GET/POST /api/admin/users`; `PATCH users/:id/toggle-status`; `POST users/:id/reset-password`; `POST /api/admin/notifications`; `GET /api/admin/stats` |
+| Administración (solo ADMIN) | `GET/POST /api/admin/users`; `PATCH users/:id/role` (cambia ADMIN↔ASESOR); `PATCH users/:id/toggle-status`; `POST users/:id/reset-password`; `POST /api/admin/notifications`; `GET /api/admin/stats` |
 | Cron | `GET /api/cron/check-reminders` (deshabilitada: 404 salvo que exista `CRON_SECRET`) |
 | Salud | `GET /health` |
 
@@ -174,6 +174,8 @@ mvevip_lead_app/
 ### 4.3. Frontend (resumen de funciones)
 
 - **Estación de trabajo desktop (`lg ≥ 1024px`):** asistente a la izquierda y calendario/agenda a la derecha con scroll independiente. En móvil, `BottomNav` alterna entre Asistente y Agenda con gestos de deslizamiento.
+- **Calendario y agenda:** `DayPicker` muestra la semana de lunes a domingo; `TimelineView` muestra franjas de 5 AM a 11 PM (agenda hasta las 12 AM, hora de Quito) y un bloque «Fuera de horario» (12–5 AM) que aparece solo si hay compromisos en ese tramo, para que ninguno quede oculto. El cron de notificaciones no tiene restricción de día ni hora: corre 24/7.
+- **Cambio de tipo de usuario:** el panel de usuarios permite pasar un usuario de ADMIN a ASESOR y viceversa. Reglas: no se puede cambiar el propio tipo; no se puede degradar al último administrador activo; el cambio cierra las sesiones del usuario (`tokenVersion`) y le envía un aviso push; queda el log `role_changed` (actor, objetivo, de, a, sesiones cerradas). Los permisos los decide siempre el servidor según el rol en la base de datos.
 - **Agenda multi-asesor:** los administradores filtran por uno, varios o todos los asesores; cada tarjeta muestra el asesor responsable.
 - **Chat:** texto, notas de voz, fotos por selección, arrastrar y soltar, y pegado desde el portapapeles (`Ctrl + V`).
 - **Notificaciones:** Web Push (VAPID) con sonido y vibración; compatible con iOS 16.4+ (PWA instalada) y Chrome en Android.
@@ -326,7 +328,7 @@ aws lambda update-function-code --function-name mvevip-lead-api --s3-bucket mvev
 Verificar con `get-function-configuration` que `LastUpdateStatus` sea `Successful` y que el `CodeSha256` cambió.
 
 ### 8.4. Frontend
-`deploy-aws.ps1` compila con Vite dentro del contenedor, sincroniza a S3 (con `no-cache` en `index.html`, `sw.js` y `version.json`) e invalida CloudFront. Al publicar una versión nueva se debe actualizar a la vez `client/src/version.js`, `client/public/version.json` y `CACHE_NAME` en `client/public/sw.js`.
+`deploy-aws.ps1` compila con Vite dentro del contenedor (el `client/package-lock.json` fija las versiones; tras traer cambios de dependencias ejecutar `docker exec mvevip_lead_client npm install`, no `npm ci`, porque `node_modules` es un volumen anónimo), sincroniza a S3 (con `no-cache` en `index.html`, `sw.js` y `version.json`) e invalida CloudFront. Al publicar una versión nueva se debe actualizar a la vez `client/src/version.js`, `client/public/version.json` y `CACHE_NAME` en `client/public/sw.js`.
 
 ---
 
@@ -339,6 +341,7 @@ El repositorio **no tiene pruebas automatizadas**. Durante la sesión del 21-oct
 ## 10. Historial de cambios
 
 ### Versiones del frontend
+- **1.0.7 (21-oct-2026):** calendario de lunes a domingo, de 5 AM a 12 AM, con bloque «Fuera de horario»; cambio de tipo de usuario (Administrador/Asesor) en el panel de usuarios; `package-lock.json` del cliente.
 - **1.0.6 (12-oct-2026):** asistente a la izquierda y calendario a la derecha en desktop.
 - **1.0.5 (12-oct-2026):** estación de trabajo desktop, sonido y vibración en push, arrastrar y soltar y pegado de imágenes en el chat.
 - **1.0.4 y anteriores:** asistente con Gemini, agenda multi-asesor, ajustes móviles, resolución del bucle de actualización de la PWA.
