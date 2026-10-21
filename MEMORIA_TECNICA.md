@@ -166,6 +166,7 @@ mvevip_lead_app/
 - **Fechas:** los días se calculan siempre en hora de Quito (UTC-5 fijo), sin depender de la zona horaria del servidor.
 - **Límites de tiempo:** timeout de 15 s por llamada a Gemini y presupuesto de 24 s por turno (el API Gateway corta a los 30 s). Un único reintento ante 429/503.
 - **Rondas de herramientas:** hasta 3. Si el modelo sigue pidiendo herramientas o responde sin texto, se hace una llamada final **sin herramientas** pidiendo responder con lo ya obtenido. Nunca se entrega ni se guarda una respuesta vacía.
+- **Bloqueos del filtro de contenido:** Gemini evalúa todo el contexto y da falsos positivos ocasionales (`PROHIBITED_CONTENT`). Si bloquea el primer llamado de un turno y hay historial, se reintenta una vez **sin historial**. Nunca se reintenta después de ejecutar herramientas (no se duplican escrituras). Los logs de error registran `blockReason`, `hasFile`, `fileType` (imagen o audio) e `historyMessages`.
 - **Errores:** se clasifican (timeout, demanda alta, contenido bloqueado, respuesta vacía, genérico) y el usuario recibe un mensaje natural. El detalle técnico va solo a los logs. Los mensajes de error no se guardan en el historial.
 - **Límite de uso:** 15 mensajes por minuto por usuario.
 - **Historial:** se guarda en `chat_messages`; se omiten los mensajes vacíos al construir el contexto y al listarlos.
@@ -248,6 +249,8 @@ aws logs filter-log-events --log-group-name /aws/lambda/mvevip-lead-api --start-
 | `http` | Error HTTP (4xx en `warn`, 5xx en `error`) con `requestId` |
 | `assistant_turn` | Un turno del asistente: duración, llamadas a Gemini, `forcedAnswer`, herramientas y parámetros no sensibles |
 | `tool:<nombre>`, `gemini_retry`, `gemini_not_configured` | Fallos de herramientas o de Gemini |
+| `gemini_blocked_retry` | Gemini bloqueó el primer llamado de un turno y se reintentó sin historial (incluye `blockReason` e `historyMessages`) |
+| `push_delivery_failed`, `push_send`, `push_broadcast` | Envíos push fallidos por dispositivo (`statusCode`, si la suscripción se eliminó) o error general; nunca incluyen el endpoint ni el contenido |
 | `bot_turn` | Fallo del controlador del asistente |
 | `login_failed`, `login_rate_limited` | Seguridad del login (incluyen la IP) |
 | `rate_limit_*`, `token_version_*` | Fallos de las tablas del limitador o de `tokenVersion` (el sistema sigue funcionando sin límite) |
@@ -351,6 +354,8 @@ El repositorio **no tiene pruebas automatizadas**. Durante la sesión del 21-oct
 | `be72b84` / `006f9a5` | Verificación de origen CloudFront → API Gateway |
 | `8cc1f94` | Asistente sin respuestas vacías, fechas en hora de Quito, historial sin mensajes vacíos |
 | `25db1c2` / `90a9582` | Documentación; el empaquetado de la Lambda verifica el contenido del zip; revisión de compatibilidad con Node 22/24 |
+
+| `61473c3` | Reintento sin historial ante bloqueos del filtro de Gemini; logs de diagnóstico del asistente y de push por dispositivo |
 
 **Runtime:** la Lambda pasó de `nodejs20.x` a `nodejs24.x` (cambio solo de configuración, sin redeploy de código).
 
