@@ -2,6 +2,8 @@ const { processAssistantTurn } = require('../services/geminiService');
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const { uploadToS3 } = require('../services/s3Service');
+const { logError } = require('../utils/logger');
+const { getRequestId } = require('../utils/requestContext');
 
 /**
  * Endpoint conversacional multi-turno con el Asistente IA permanente
@@ -59,6 +61,24 @@ const handleConversationTurn = async (req, res) => {
       new Date()
     );
 
+    // Si el turno falló, se responde con un mensaje amable pero NO se guarda en el historial
+    // (evita contaminar el contexto que se reenvía a Gemini en los siguientes turnos)
+    if (turnResult.isError) {
+      return res.json({
+        success: true,
+        data: {
+          id: `err-${Date.now()}`,
+          role: 'assistant',
+          content: turnResult.reply,
+          mediaUrl: null,
+          images: [],
+          actions: turnResult.actions || [],
+          isError: true,
+          createdAt: new Date()
+        }
+      });
+    }
+
     // 5. Determinar mediaUrl del bot si devolvió imágenes de leads consultados
     const botMediaUrl = turnResult.images && turnResult.images.length > 0 ? turnResult.images[0] : null;
 
@@ -86,8 +106,9 @@ const handleConversationTurn = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error en handleConversationTurn:', error);
-    return res.status(500).json({ error: 'Error procesando consulta del asistente', detail: error.message });
+    const requestId = getRequestId();
+    logError('bot_turn', error, { requestId, userId: req.user?.id });
+    return res.status(500).json({ error: 'Error procesando consulta del asistente', requestId });
   }
 };
 

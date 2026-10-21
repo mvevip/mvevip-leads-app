@@ -11,6 +11,7 @@ const reminderController = require('../controllers/reminderController');
 const botController = require('../controllers/botController');
 const adminController = require('../controllers/adminController');
 const pushController = require('../controllers/pushController');
+const { logError } = require('../utils/logger');
 
 // Multer en memoria para audio e imágenes
 const upload = multer({
@@ -54,7 +55,8 @@ router.get('/cron/check-reminders', async (req, res) => {
     const result = await checkAndNotifyDueReminders();
     return res.json({ success: true, ...result });
   } catch (err) {
-    return res.status(500).json({ success: false, error: err.message });
+    logError('cron_route', err);
+    return res.status(500).json({ success: false, error: 'Error ejecutando el cron de recordatorios' });
   }
 });
 
