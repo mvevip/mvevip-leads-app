@@ -76,7 +76,7 @@ const changePassword = async (req, res) => {
     };
 
     if (avatarUrl) {
-      updateData.avatarUrl = avatarUrl;
+      updateData.avatarUrl = normalizeMediaUrl(avatarUrl);
       updateData.isFirstLogin = false;
     }
 
@@ -104,7 +104,7 @@ const changePassword = async (req, res) => {
   }
 };
 
-const { uploadBase64Image } = require('../services/s3Service');
+const { uploadBase64Image, normalizeMediaUrl } = require('../services/s3Service');
 
 /**
  * Actualizar avatar del usuario desde el perfil o durante onboarding
@@ -115,6 +115,8 @@ const updateAvatar = async (req, res) => {
 
     if (avatarUrl && avatarUrl.startsWith('data:image')) {
       avatarUrl = await uploadBase64Image('avatars', avatarUrl);
+    } else if (avatarUrl) {
+      avatarUrl = normalizeMediaUrl(avatarUrl); // Si el cliente reenvía una URL firmada, se guarda sin firma
     }
 
     const updatedUser = await prisma.user.update({

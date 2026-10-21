@@ -6,6 +6,7 @@ const cors = require('cors');
 const apiRoutes = require('./routes/api');
 const { logError, logWarn } = require('./utils/logger');
 const { getRequestId } = require('./utils/requestContext');
+const { signMediaResponses } = require('./middleware/signMedia');
 
 const app = express();
 
@@ -18,6 +19,9 @@ app.use(cors({
 
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
+
+// Firma las URLs de archivos subidos (avatarUrl, mediaUrl, images) en todas las respuestas JSON
+app.use(signMediaResponses);
 
 // Healthcheck
 app.get('/health', (req, res) => {

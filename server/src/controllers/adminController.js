@@ -2,6 +2,7 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const bcrypt = require('bcryptjs');
 const { sendBroadcastPush, sendPushToUser } = require('../services/webPushService');
+const { normalizeMediaUrl } = require('../services/s3Service');
 
 /**
  * Listar todos los usuarios / asesores (con soporte para filtro active/inactive)
@@ -69,7 +70,7 @@ const createUser = async (req, res) => {
         passwordHash,
         role,
         phone,
-        avatarUrl: avatarUrl || null,
+        avatarUrl: avatarUrl ? normalizeMediaUrl(avatarUrl) : null,
         isActive: true,
         mustChangePassword: true, // Nuevo usuario debe cambiar clave
         isFirstLogin: true // Nuevo usuario debe registrar o omitir foto
