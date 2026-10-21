@@ -2,7 +2,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const { uploadToS3 } = require('./s3Service');
-const { logError, logInfo } = require('../utils/logger');
+const { logError, logWarn, logInfo } = require('../utils/logger');
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
@@ -636,6 +636,8 @@ const processAssistantTurn = async (user, history = [], newMessage = '', fileBuf
   const logContext = { userId: user?.id, model: modelName };
   const executedActions = [];
   let geminiCalls = 0;
+  let retriedWithoutHistory = false;
+  const recentHistoryCount = Array.isArray(history) ? Math.min(history.length, 10) : 0;
 
   try {
     const model = genAI.getGenerativeModel({
@@ -650,31 +652,7 @@ const processAssistantTurn = async (user, history = [], newMessage = '', fileBuf
       .replace('{USER_ROLE}', user?.role || 'ASESOR')
       .replace('{USER_ID}', user?.id || '');
 
-    const contents = [];
-
-    // System prompt como primer mensaje
-    contents.push({
-      role: 'user',
-      parts: [{ text: systemInstruction }]
-    });
-
-    contents.push({
-      role: 'model',
-      parts: [{ text: 'Entendido. Soy tu asistente comercial. Estoy listo para ayudarte a gestionar tus citas, clientes y compromisos de forma ágil y natural.' }]
-    });
-
-    // Inyectar historial previo (últimos 10 mensajes para mantener contexto ágil)
-    if (history && history.length > 0) {
-      const recent = history.slice(-10);
-      for (const msg of recent) {
-        contents.push({
-          role: msg.role === 'assistant' || msg.role === 'model' ? 'model' : 'user',
-          parts: [{ text: msg.content || msg.text || '' }]
-        });
-      }
-    }
-
-    // Preparar mensaje actual del usuario
+    // Mensaje actual del usuario (con su archivo adjunto, si lo hay)
     const currentParts = [];
     if (fileBuffer && mimeType) {
       currentParts.push({
@@ -692,15 +670,51 @@ const processAssistantTurn = async (user, history = [], newMessage = '', fileBuf
       currentParts.push({ text: newMessage || 'Hola' });
     }
 
-    contents.push({
-      role: 'user',
-      parts: currentParts
-    });
+    // Contexto enviado al modelo: instrucciones del sistema, historial reciente (últimos 10 mensajes) y el mensaje actual
+    const buildContents = (historyMessages) => {
+      const built = [
+        { role: 'user', parts: [{ text: systemInstruction }] },
+        { role: 'model', parts: [{ text: 'Entendido. Soy tu asistente comercial. Estoy listo para ayudarte a gestionar tus citas, clientes y compromisos de forma ágil y natural.' }] }
+      ];
+      for (const msg of (historyMessages || []).slice(-10)) {
+        built.push({
+          role: msg.role === 'assistant' || msg.role === 'model' ? 'model' : 'user',
+          parts: [{ text: msg.content || msg.text || '' }]
+        });
+      }
+      built.push({ role: 'user', parts: currentParts });
+      return built;
+    };
+
+    let contents = buildContents(history);
 
     // 1. Primera llamada a Gemini (puede retornar texto o llamada a herramienta)
     geminiCalls++;
-    let response = await callGemini(model, contents, deadline, logContext);
-    let functionCalls = response.response.functionCalls();
+    let response;
+    let functionCalls;
+    try {
+      response = await callGemini(model, contents, deadline, logContext);
+      functionCalls = response.response.functionCalls();
+    } catch (firstCallError) {
+      // El filtro de contenido de Gemini evalúa todo el contexto y puede dar falsos positivos por mensajes antiguos del historial.
+      // Si bloquea el primer llamado (aún no se ejecutó ninguna herramienta, nada se duplica), se reintenta una vez sin historial.
+      const { kind } = classifyGeminiError(firstCallError);
+      if (kind !== 'blocked' || recentHistoryCount === 0 || executedActions.length > 0) {
+        throw firstCallError;
+      }
+      logWarn('gemini_blocked_retry', {
+        ...logContext,
+        blockReason: firstCallError?.response?.promptFeedback?.blockReason,
+        historyMessages: recentHistoryCount,
+        hasFile: Boolean(fileBuffer),
+        fileType: mimeType ? mimeType.split('/')[0] : undefined
+      });
+      retriedWithoutHistory = true;
+      contents = buildContents([]);
+      geminiCalls++;
+      response = await callGemini(model, contents, deadline, logContext);
+      functionCalls = response.response.functionCalls();
+    }
 
     let leadImages = [];
 
@@ -771,6 +785,7 @@ const processAssistantTurn = async (user, history = [], newMessage = '', fileBuf
       durationMs: Date.now() - startedAt,
       geminiCalls,
       forcedAnswer,
+      retriedWithoutHistory,
       tools: executedActions.map((a) => a.tool),
       calls: executedActions.map(describeToolCall),
       hasFile: Boolean(fileBuffer)
@@ -786,6 +801,11 @@ const processAssistantTurn = async (user, history = [], newMessage = '', fileBuf
     logError('assistant_turn', error, {
       ...logContext,
       kind,
+      blockReason: error?.response?.promptFeedback?.blockReason,
+      hasFile: Boolean(fileBuffer),
+      fileType: mimeType ? mimeType.split('/')[0] : undefined,
+      historyMessages: retriedWithoutHistory ? 0 : recentHistoryCount,
+      retriedWithoutHistory,
       durationMs: Date.now() - startedAt,
       geminiCalls,
       tools: executedActions.map((a) => a.tool),
