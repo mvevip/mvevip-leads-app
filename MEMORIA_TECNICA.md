@@ -3,8 +3,10 @@
 **Proyecto:** MVEVIP Leads & Recordatorios (PWA)  
 **Versión Actual:** 1.0.6  
 **Dominio de Producción:** [https://leads.mvevip.com](https://leads.mvevip.com)  
-**Repositorio:** [https://github.com/caloloc2/mvevip_leads_agente](https://github.com/caloloc2/mvevip_leads_agente)  
-**Fecha:** 12 de Octubre de 2026  
+**Repositorios:**  
+- Personal (respaldo y actividad): [https://github.com/caloloc2/mvevip_leads_agente](https://github.com/caloloc2/mvevip_leads_agente)  
+- Empresa (colaborador principal): [https://github.com/mvevip/mvevip-leads-app](https://github.com/mvevip/mvevip-leads-app)  
+**Fecha:** 21 de Octubre de 2026  
 
 ---
 
