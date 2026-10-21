@@ -4,9 +4,15 @@ const { sendPushToUser } = require('./webPushService');
 
 const prisma = new PrismaClient();
 
+// Si el push no pudo entregarse a ningún dispositivo, se reintenta cada minuto durante esta ventana
+const RETRY_WINDOW_MS = 15 * 60 * 1000;
+
 /**
  * Tarea periódica ejecutada cada 60 segundos (* * * * *)
- * Revisa recordatorios pendientes cuya hora programada ya llegó o está en el rango de los próximos 5 minutos
+ * Revisa recordatorios pendientes cuya hora programada ya llegó.
+ * Cada recordatorio se reclama de forma atómica (notificationSent: false -> true) antes de enviar,
+ * para que dos ejecuciones solapadas no lo notifiquen dos veces. Si el envío no llega a ningún
+ * dispositivo, se libera el reclamo para reintentar en la siguiente ejecución dentro de RETRY_WINDOW_MS.
  */
 const checkAndNotifyDueReminders = async () => {
   try {
@@ -30,6 +36,14 @@ const checkAndNotifyDueReminders = async () => {
 
     const results = [];
     for (const reminder of dueReminders) {
+      const claim = await prisma.reminder.updateMany({
+        where: { id: reminder.id, status: 'PENDING', notificationSent: false },
+        data: { notificationSent: true }
+      });
+      if (claim.count === 0) {
+        continue; // Otra ejecución ya lo tomó, o dejó de estar pendiente
+      }
+
       const payload = {
         title: `⏰ Recordatorio Lead: ${reminder.clientName}`,
         body: `${reminder.title} - ${reminder.description || 'Sin notas adicionales'}`,
@@ -44,14 +58,29 @@ const checkAndNotifyDueReminders = async () => {
         }
       };
 
-      const result = await sendPushToUser(reminder.assignedId, payload);
-      await prisma.reminder.update({
-        where: { id: reminder.id },
-        data: { notificationSent: true }
-      });
+      let result;
+      try {
+        result = await sendPushToUser(reminder.assignedId, payload);
+      } catch (err) {
+        result = { success: false, error: err.message };
+      }
 
-      console.log(`📲 Notificación enviada a asesor ${reminder.assigned.name}:`, result);
-      results.push({ reminderId: reminder.id, result });
+      const delivered = Boolean(result && result.success && result.sentCount > 0);
+      const withinRetryWindow = now.getTime() - reminder.scheduledAt.getTime() < RETRY_WINDOW_MS;
+
+      if (!delivered && withinRetryWindow) {
+        await prisma.reminder.update({
+          where: { id: reminder.id },
+          data: { notificationSent: false }
+        });
+        console.warn(`⚠️ Push no entregado a asesor ${reminder.assigned.name}, se reintentará:`, result);
+      } else if (delivered) {
+        console.log(`📲 Notificación enviada a asesor ${reminder.assigned.name}:`, result);
+      } else {
+        console.warn(`⚠️ Push no entregado a asesor ${reminder.assigned.name} y venció la ventana de reintento:`, result);
+      }
+
+      results.push({ reminderId: reminder.id, delivered, result });
     }
     return { count: dueReminders.length, results };
   } catch (err) {
