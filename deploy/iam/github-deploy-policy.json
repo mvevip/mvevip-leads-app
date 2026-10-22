@@ -1,0 +1,35 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "LambdaDeploy",
+      "Effect": "Allow",
+      "Action": ["lambda:UpdateFunctionCode", "lambda:GetFunction", "lambda:GetFunctionConfiguration"],
+      "Resource": "arn:aws:lambda:us-west-2:021891594659:function:mvevip-lead-api"
+    },
+    {
+      "Sid": "BucketList",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
+      "Resource": "arn:aws:s3:::mvevip-leads"
+    },
+    {
+      "Sid": "StaticAndDeployments",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "NotResource": "arn:aws:s3:::mvevip-leads/uploads/*"
+    },
+    {
+      "Sid": "CloudFrontInvalidate",
+      "Effect": "Allow",
+      "Action": "cloudfront:CreateInvalidation",
+      "Resource": "arn:aws:cloudfront::021891594659:distribution/E2FMW6HOSKOVMP"
+    },
+    {
+      "Sid": "ReadLogsForVerification",
+      "Effect": "Allow",
+      "Action": "logs:FilterLogEvents",
+      "Resource": "arn:aws:logs:us-west-2:021891594659:log-group:/aws/lambda/mvevip-lead-api:*"
+    }
+  ]
+}

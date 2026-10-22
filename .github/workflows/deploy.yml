@@ -1,0 +1,122 @@
+name: Deploy
+
+# Despliegue manual con aprobacion: el job "deploy" usa el environment "production",
+# que debe tener revisores requeridos (Settings > Environments).
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Que desplegar
+        type: choice
+        options: [backend+frontend, backend, frontend]
+        default: backend+frontend
+
+permissions:
+  contents: read
+  id-token: write # OIDC hacia AWS
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-west-2
+  FUNCTION_NAME: mvevip-lead-api
+  BUCKET: mvevip-leads
+  DISTRIBUTION_ID: E2FMW6HOSKOVMP
+  HEALTH_URL: https://leads.mvevip.com/health
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Backend - paquete Lambda verificado
+        if: inputs.target != 'frontend'
+        run: deploy/ci/package-lambda.sh "$RUNNER_TEMP/lambda-backend.zip" && mkdir -p out && cp "$RUNNER_TEMP/lambda-backend.zip" out/
+
+      - name: Frontend - compilar
+        if: inputs.target != 'backend'
+        working-directory: client
+        env:
+          VITE_VAPID_PUBLIC_KEY: ${{ vars.VITE_VAPID_PUBLIC_KEY }}
+        run: |
+          test -n "$VITE_VAPID_PUBLIC_KEY" || { echo "::error::Falta la variable VITE_VAPID_PUBLIC_KEY"; exit 1; }
+          npm ci --no-audit --no-fund
+          npm run build
+          mkdir -p ../out && cp -r dist ../out/dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: out
+          retention-days: 14
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production # <- aprobacion manual
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: out
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Respaldo automatico de lo que esta en produccion
+        run: |
+          stamp=$(date -u +%Y%m%d-%H%M%S)
+          echo "STAMP=$stamp" >> "$GITHUB_ENV"
+          if [ "${{ inputs.target }}" != "frontend" ]; then
+            aws s3 cp "s3://$BUCKET/deployments/lambda-backend.zip" "s3://$BUCKET/deployments/backup/lambda-backend-$stamp-${GITHUB_SHA::7}.zip"
+          fi
+          if [ "${{ inputs.target }}" != "backend" ]; then
+            aws s3 sync "s3://$BUCKET" "s3://$BUCKET/deployments/backup/frontend-$stamp" \
+              --exclude "deployments/*" --exclude "uploads/*"
+          fi
+
+      - name: Backend - subir y actualizar la Lambda
+        if: inputs.target != 'frontend'
+        run: |
+          aws s3 cp out/lambda-backend.zip "s3://$BUCKET/deployments/lambda-backend.zip"
+          aws lambda update-function-code --function-name "$FUNCTION_NAME" \
+            --s3-bucket "$BUCKET" --s3-key deployments/lambda-backend.zip --region "$AWS_REGION" > /dev/null
+          aws lambda wait function-updated --function-name "$FUNCTION_NAME" --region "$AWS_REGION"
+          # Hash que debe quedar en produccion: sha256 en base64 del zip subido
+          echo "EXPECTED_SHA=$(openssl dgst -sha256 -binary out/lambda-backend.zip | base64)" >> "$GITHUB_ENV"
+
+      - name: Frontend - sincronizar a S3 e invalidar CloudFront
+        if: inputs.target != 'backend'
+        run: |
+          aws s3 sync out/dist "s3://$BUCKET" --delete --exclude "deployments/*" --exclude "uploads/*"
+          for f in index.html sw.js version.json; do
+            aws s3 cp "out/dist/$f" "s3://$BUCKET/$f" --cache-control "no-cache, no-store, must-revalidate"
+          done
+          aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/*" > /dev/null
+
+      - name: Verificacion posterior (hash, /health, logs)
+        if: inputs.target != 'frontend'
+        run: FUNCTION_NAME="$FUNCTION_NAME" REGION="$AWS_REGION" deploy/ci/verify-deploy.sh
+
+      - name: Verificacion del frontend (version publicada)
+        if: inputs.target != 'backend'
+        run: |
+          expected=$(node -p "require('./out/dist/version.json').version")
+          sleep 10
+          live=$(curl -fsS "https://leads.mvevip.com/version.json?cb=$(date +%s)" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")
+          echo "esperada=$expected publicada=$live"
+          [ "$expected" = "$live" ]
+
+      - name: Como revertir (si algo fallo)
+        if: failure()
+        run: |
+          echo "::warning::El despliegue fallo. Ejecuta el workflow 'Rollback' con el respaldo $STAMP (backend: lambda-backend-$STAMP-*.zip)."

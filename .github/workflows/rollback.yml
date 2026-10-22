@@ -1,0 +1,53 @@
+name: Rollback
+
+# Revierte la Lambda a un zip de s3://mvevip-leads/deployments/backup/. Requiere aprobacion (environment production).
+on:
+  workflow_dispatch:
+    inputs:
+      backup_key:
+        description: "Nombre del zip en deployments/backup/ (vacio = listar los disponibles)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-west-2
+  FUNCTION_NAME: mvevip-lead-api
+  BUCKET: mvevip-leads
+  HEALTH_URL: https://leads.mvevip.com/health
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Respaldos disponibles
+        run: aws s3 ls "s3://$BUCKET/deployments/backup/" | grep -E 'lambda-backend.*\.zip' | sort | tail -20
+
+      - name: Revertir la Lambda
+        if: inputs.backup_key != ''
+        run: |
+          key="deployments/backup/${{ inputs.backup_key }}"
+          aws s3api head-object --bucket "$BUCKET" --key "$key" > /dev/null
+          aws lambda update-function-code --function-name "$FUNCTION_NAME" \
+            --s3-bucket "$BUCKET" --s3-key "$key" --region "$AWS_REGION" > /dev/null
+          aws lambda wait function-updated --function-name "$FUNCTION_NAME" --region "$AWS_REGION"
+          # Dejar tambien el zip "actual" igual al revertido
+          aws s3 cp "s3://$BUCKET/$key" "s3://$BUCKET/deployments/lambda-backend.zip"
+
+      - name: Verificar
+        if: inputs.backup_key != ''
+        run: FUNCTION_NAME="$FUNCTION_NAME" REGION="$AWS_REGION" deploy/ci/verify-deploy.sh

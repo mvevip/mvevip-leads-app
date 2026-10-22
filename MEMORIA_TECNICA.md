@@ -330,6 +330,14 @@ Verificar con `get-function-configuration` que `LastUpdateStatus` sea `Successfu
 ### 8.4. Frontend
 `deploy-aws.ps1` compila con Vite dentro del contenedor (el `client/package-lock.json` fija las versiones; tras traer cambios de dependencias ejecutar `docker exec mvevip_lead_client npm install`, no `npm ci`, porque `node_modules` es un volumen anónimo), sincroniza a S3 (con `no-cache` en `index.html`, `sw.js` y `version.json`) e invalida CloudFront. Al publicar una versión nueva se debe actualizar a la vez `client/src/version.js`, `client/public/version.json` y `CACHE_NAME` en `client/public/sw.js`.
 
+### 8.5. GitHub Actions (en implantación)
+Archivos: `.github/workflows/ci.yml` (sintaxis, carga de la app, empaquetado verificado, build del cliente, coherencia de versiones), `deploy.yml` (manual, con aprobación; respaldo automático, hash, `/health`, logs) y `rollback.yml`. Scripts en `deploy/ci/`; políticas IAM en `deploy/iam/`.
+
+**Pasos de configuración pendientes (una sola vez):**
+1. AWS: crear el proveedor OIDC `token.actions.githubusercontent.com` (hoy no existe en la cuenta) y el rol `mvevip-leads-github-deploy` con `deploy/iam/github-deploy-trust.json` y `github-deploy-policy.json`.
+2. GitHub: environment `production` con revisores requeridos; variables `AWS_DEPLOY_ROLE_ARN` y `VITE_VAPID_PUBLIC_KEY` (la clave pública de la Lambda).
+3. Primer despliegue de prueba con `target=frontend`, luego `backend`.
+
 ---
 
 ## 9. Pruebas
@@ -374,7 +382,7 @@ El repositorio **no tiene pruebas automatizadas**. Durante la sesión del 21-oct
 ### 11.1. Pendientes, por prioridad
 | # | Pendiente | Detalle |
 |---|---|---|
-| 0 | **Despliegue controlado con GitHub Actions (primer tema de la próxima sesión)** | Hoy se despliega a mano (PowerShell/Docker o parche del zip desde la sesión de Claude). Objetivo: flujo en GitHub Actions con pruebas previas, entorno con aprobación manual, credenciales por OIDC hacia un rol de IAM mínimo (sin claves largas), respaldo automático del zip y de los archivos previos, verificación del hash, `/health` y logs tras el despliegue, y reversión con un clic. Incluye decidir si la rama `claude/loving-mendel-okleeo` se integra a `main` por PR. Compilar el frontend con `VITE_VAPID_PUBLIC_KEY` |
+| 0 | **Despliegue controlado con GitHub Actions (EN CURSO: workflows escritos, falta configurar AWS y GitHub, ver 8.5)** | Hoy se despliega a mano (PowerShell/Docker o parche del zip desde la sesión de Claude). Objetivo: flujo en GitHub Actions con pruebas previas, entorno con aprobación manual, credenciales por OIDC hacia un rol de IAM mínimo (sin claves largas), respaldo automático del zip y de los archivos previos, verificación del hash, `/health` y logs tras el despliegue, y reversión con un clic. Incluye decidir si la rama `claude/loving-mendel-okleeo` se integra a `main` por PR. Compilar el frontend con `VITE_VAPID_PUBLIC_KEY` |
 | 1 | **Runtime Node 24: hecho en producción (21-oct-2026). Falta alinear los contenedores locales** | `server/Dockerfile` y `client/Dockerfile` siguen en `node:20-alpine`: pasarlos a `node:24-alpine` y recrear el volumen de `node_modules` (`docker compose up -d --build -V`). Contexto: `nodejs20.x` **ya estaba deprecado** (30-abr-2026): AWS puede dejar de aplicarle parches de seguridad y la función no tiene soporte técnico. Hitos oficiales: bloqueo de creación de funciones el 29-jul-2027 y **bloqueo de actualizaciones el 31-ago-2027** (después no se podría ni corregir un error). El SDK de AWS v3 exigirá Node 22 desde la primera semana de enero de 2027 (afecta solo a actualizaciones futuras del SDK). Se recomienda **Node 24** (soportado hasta el 30-abr-2028); `nodejs22.x` se deprecaría el 30-abr-2027. La cuenta ya tiene 12 funciones en Node 24 y 6 en Node 22. Revisión de compatibilidad hecha el 21-oct-2026: ver 11.3 |
 | 2 | **403 y 404 del API llegan como HTML con 200** | CloudFront tiene respuestas de error personalizadas (403/404 → `index.html`) que aplican también a `/api/*`. Afecta, por ejemplo, a los mensajes "No autorizado". Corregir con cuidado: la CloudFront Function es compartida |
 | 3 | **Rol compartido con `AmazonS3FullAccess`** | Crear un rol propio para esta función con acceso solo a `uploads/*` |
