@@ -29,6 +29,8 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Necesario para leer las variables del environment (VITE_VAPID_PUBLIC_KEY)
+    environment: production
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
