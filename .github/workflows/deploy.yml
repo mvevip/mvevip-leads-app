@@ -79,7 +79,7 @@ jobs:
           stamp=$(date -u +%Y%m%d-%H%M%S)
           echo "STAMP=$stamp" >> "$GITHUB_ENV"
           if [ "${{ inputs.target }}" != "frontend" ]; then
-            aws s3 cp "s3://$BUCKET/deployments/lambda-backend.zip" "s3://$BUCKET/deployments/backup/lambda-backend-$stamp-${GITHUB_SHA::7}.zip"
+            aws s3 cp "s3://$BUCKET/deployments/lambda-backend.zip" "s3://$BUCKET/deployments/backup/lambda-backend-$stamp-${GITHUB_SHA::7}.zip" --copy-props none
           fi
           if [ "${{ inputs.target }}" != "backend" ]; then
             aws s3 sync "s3://$BUCKET" "s3://$BUCKET/deployments/backup/frontend-$stamp" \
