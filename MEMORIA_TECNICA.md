@@ -377,6 +377,7 @@ El repositorio **no tiene pruebas automatizadas**. Durante la sesión del 21-oct
 ## 10. Historial de cambios
 
 ### Versiones del frontend
+- **1.0.8 (22-oct-2026):** volumen configurable del tono con la app abierta (control en Perfil, se guarda en el dispositivo), chime de tres notas más fuerte con limitador y audio preparado en el primer toque del usuario. Con la app cerrada el sonido y su volumen los pone el sistema operativo, no la app.
 - **1.0.7 (21-oct-2026):** calendario de lunes a domingo, de 5 AM a 12 AM, con bloque «Fuera de horario»; cambio de tipo de usuario (Administrador/Asesor) en el panel de usuarios; `package-lock.json` del cliente.
 - **1.0.6 (12-oct-2026):** asistente a la izquierda y calendario a la derecha en desktop.
 - **1.0.5 (12-oct-2026):** estación de trabajo desktop, sonido y vibración en push, arrastrar y soltar y pegado de imágenes en el chat.
