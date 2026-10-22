@@ -1,5 +1,5 @@
 {
-  "version": "1.0.7",
-  "buildTime": "2026-10-21T23:00:00Z",
-  "notes": "Agenda de lunes a domingo de 5 AM a 12 AM y cambio de tipo de usuario (Administrador/Asesor) en el panel de usuarios"
+  "version": "1.0.8",
+  "buildTime": "2026-10-22T21:00:00Z",
+  "notes": "Control de volumen del tono con la app abierta, sonido de notificación más fuerte y audio preparado desde el primer toque"
 }

@@ -41,6 +41,7 @@ export default function HomePage() {
   });
   const [loading, setLoading] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(() => soundService.isSoundEnabled());
+  const [soundVolume, setSoundVolume] = useState(() => Math.round(soundService.getVolume() * 100));
 
   // Escuchar evento push desde el Service Worker para reproducir tono en vivo
   useEffect(() => {
@@ -64,6 +65,15 @@ export default function HomePage() {
       soundService.testNotificationAlert();
     }
   };
+
+  const handleVolumeChange = (e) => {
+    const percent = Number(e.target.value);
+    setSoundVolume(percent);
+    soundService.setVolume(percent / 100);
+  };
+
+  // Al soltar el control se reproduce el tono para que el usuario oiga el nivel elegido
+  const handleVolumeCommit = () => soundService.testNotificationAlert();
 
   // Filtro multi-usuario para ADMIN en Agenda (por defecto SOLO el usuario actual)
   const [selectedUserIds, setSelectedUserIds] = useState(() => (user?.id ? [user.id] : []));
@@ -423,6 +433,31 @@ export default function HomePage() {
                   </button>
                 </div>
               </div>
+
+              {/* VOLUMEN DEL TONO DENTRO DE LA APP */}
+              {soundEnabled && (
+                <div className="p-3 bg-slate-50 dark:bg-neutral-750 rounded-2xl">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-bold text-slate-800 dark:text-neutral-100">Volumen del tono</span>
+                    <span className="text-[11px] font-bold text-[#6B8A0E] dark:text-[#9AC31C]">{soundVolume}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="5"
+                    value={soundVolume}
+                    onChange={handleVolumeChange}
+                    onPointerUp={handleVolumeCommit}
+                    onKeyUp={handleVolumeCommit}
+                    aria-label="Volumen del tono de notificación"
+                    className="w-full accent-[#9AC31C] cursor-pointer"
+                  />
+                  <span className="text-[10px] text-slate-400 dark:text-neutral-400 block mt-1">
+                    Aplica con la app abierta. Con la app cerrada, el volumen lo controla el teléfono.
+                  </span>
+                </div>
+              )}
 
               <button
                 onClick={handleEnablePush}
