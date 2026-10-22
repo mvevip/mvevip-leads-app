@@ -76,6 +76,8 @@ Todos los comandos usan el perfil de AWS CLI `marketingvip` y la región `us-wes
 | **EventBridge** | regla `mvevip-lead-cron-rule` | `rate(1 minute)` → Lambda con `{"action":"cron"}` |
 | **RDS** | `database-mvevip` (MySQL 8.4.8, `db.t4g.small`) | **Compartido con otros sistemas.** Esquema de esta app: `mvevip_lead`. Accesible públicamente (pendiente, ver sección 11) |
 | **Usuario IAM** | `mvevip-leads-media-signer` | Solo `s3:GetObject` sobre `uploads/*`; sus claves firman las URLs de imágenes |
+| **Proveedor OIDC** | `token.actions.githubusercontent.com` | Creado el 22-oct-2026 para que GitHub Actions obtenga credenciales temporales (sin claves guardadas) |
+| **Rol de despliegue** | `mvevip-leads-github-deploy` | Lo asume solo el environment `production` de `mvevip/mvevip-leads-app`. Permisos mínimos: ver 8.5 |
 
 ### 3.1. API Gateway: rutas y límites
 
@@ -303,7 +305,9 @@ CloudFront guarda en caché 24 h por defecto; tras cambiar permisos de `uploads/
 
 ## 8. Despliegue
 
-### 8.1. Procedimiento oficial
+### 8.1. Procedimiento oficial: GitHub Actions
+Desde el 22-oct-2026 el despliegue oficial es el workflow **Deploy** (ver 8.5): se lanza desde `main`, con `target` = `backend`, `frontend` o `backend+frontend`. Los scripts de PowerShell siguientes quedan como **alternativa manual** (siguen funcionando, pero no hacen respaldo ni verificación automáticos).
+
 ```powershell
 .\deploy\deploy-aws.ps1 -DeployBackend     # backend (Lambda) + frontend (S3) + invalidación de CloudFront
 .\deploy\deploy-aws.ps1                    # solo frontend
@@ -317,11 +321,14 @@ CloudFront guarda en caché 24 h por defecto; tras cambiar permisos de `uploads/
 > **Por qué el `npm install` y la verificación:** el contenedor monta `/app/node_modules` como volumen anónimo, por lo que una dependencia nueva de `package.json` no aparece ahí hasta instalarla (reconstruir la imagen no renueva ese volumen). Sin esos pasos, el zip salía sin la dependencia y la Lambda **fallaba al arrancar**. Esto ocurriría con `@aws-sdk/s3-request-presigner`, que se agregó el 21-oct-2026.
 
 ### 8.2. Antes y después de desplegar el backend
+> Con el workflow **Deploy** el respaldo y la verificación son automáticos (ver 8.5). Lo siguiente aplica al despliegue manual.
+
 - **Antes:** copiar el zip actual como respaldo: `aws s3 cp s3://mvevip-leads/deployments/lambda-backend.zip s3://mvevip-leads/deployments/backup/lambda-backend-<fecha>-<motivo>.zip`. Hoy hay 8 respaldos en `deployments/backup/`.
 - **Después:** comprobar `GET /health`, que no haya errores en los logs, que el cron siga corriendo (`Invocación por EventBridge` cada minuto) y que `Errors` y `Throttles` de la Lambda estén en 0.
 - **Cambios de esquema:** ejecutar primero el script SQL (los scripts son compatibles con el código anterior) y después desplegar.
 
 ### 8.3. Revertir
+**Con GitHub Actions:** workflow **Rollback**. Sin parámetros lista los respaldos disponibles; con `backup_key` (nombre del zip en `deployments/backup/`) revierte la Lambda, deja `lambda-backend.zip` igual al revertido y verifica hash, `/health` y logs. *Todavía no se ha ejecutado de verdad (ver 11.1).* Manualmente:
 ```powershell
 aws lambda update-function-code --function-name mvevip-lead-api --s3-bucket mvevip-leads --s3-key deployments/backup/<zip-de-respaldo>.zip --region us-west-2 --profile marketingvip
 ```
@@ -330,13 +337,34 @@ Verificar con `get-function-configuration` que `LastUpdateStatus` sea `Successfu
 ### 8.4. Frontend
 `deploy-aws.ps1` compila con Vite dentro del contenedor (el `client/package-lock.json` fija las versiones; tras traer cambios de dependencias ejecutar `docker exec mvevip_lead_client npm install`, no `npm ci`, porque `node_modules` es un volumen anónimo), sincroniza a S3 (con `no-cache` en `index.html`, `sw.js` y `version.json`) e invalida CloudFront. Al publicar una versión nueva se debe actualizar a la vez `client/src/version.js`, `client/public/version.json` y `CACHE_NAME` en `client/public/sw.js`.
 
-### 8.5. GitHub Actions (en implantación)
-Archivos: `.github/workflows/ci.yml` (sintaxis, carga de la app, empaquetado verificado, build del cliente, coherencia de versiones), `deploy.yml` (manual, con aprobación; respaldo automático, hash, `/health`, logs) y `rollback.yml`. Scripts en `deploy/ci/`; políticas IAM en `deploy/iam/`.
+### 8.5. GitHub Actions
+Archivos: `.github/workflows/ci.yml`, `deploy.yml` y `rollback.yml`; scripts en `deploy/ci/` (`package-lambda.sh`, `verify-deploy.sh`); políticas IAM en `deploy/iam/`.
 
-**Pasos de configuración pendientes (una sola vez):**
-1. AWS: crear el proveedor OIDC `token.actions.githubusercontent.com` (hoy no existe en la cuenta) y el rol `mvevip-leads-github-deploy` con `deploy/iam/github-deploy-trust.json` y `github-deploy-policy.json`.
-2. GitHub: environment `production` con revisores requeridos; variables `AWS_DEPLOY_ROLE_ARN` y `VITE_VAPID_PUBLIC_KEY` (la clave pública de la Lambda).
-3. Primer despliegue de prueba con `target=frontend`, luego `backend`.
+**Uso diario:** se piden y prueban los cambios, se mergean a `main` por PR (con el CI en verde) y se lanza `Deploy` desde `main`. Claude puede lanzarlo con sus herramientas de GitHub cuando se le pide «despliega»; **no hay aprobación manual** (el environment no tiene revisores), así que solo se lanza por orden explícita.
+
+| Workflow | Cuándo corre | Qué hace |
+|---|---|---|
+| **CI** | Cada PR y cada push a `main` | `npm ci` (Node 24), `prisma generate`, sintaxis de todo el backend, la app carga, empaquetado Lambda verificado (17 elementos), build del cliente y coherencia de versiones (`version.js` = `version.json` = `sw.js`) |
+| **Deploy** | Manual, solo desde `main` | `build`: empaqueta/compila. `deploy`: asume el rol por OIDC, respalda lo que hay en producción, sube y actualiza (Lambda y/o S3 + invalidación de CloudFront) y verifica (hash `CodeSha256`, `/health`, logs, versión publicada) |
+| **Rollback** | Manual | Lista los respaldos o revierte la Lambda a uno (ver 8.3) |
+
+**Respaldos automáticos:** `deployments/backup/lambda-backend-<AAAAMMDD-HHMMSS>-<sha>.zip` (backend) y `deployments/backup/frontend-<AAAAMMDD-HHMMSS>/` (frontend).
+
+**Configuración (hecha el 22-oct-2026):**
+- **AWS:** proveedor OIDC y rol `mvevip-leads-github-deploy` (`deploy/iam/github-deploy-trust.json` y `github-deploy-policy.json`, política inline `GithubDeploy`). El rol solo puede: actualizar el código de `mvevip-lead-api`, leer/escribir el bucket `mvevip-leads` **excepto `uploads/*`**, invalidar `E2FMW6HOSKOVMP` y leer los logs de la Lambda. No puede cambiar la configuración de la Lambda, tocar IAM/RDS ni otras funciones (probado con el simulador de IAM).
+- **GitHub:** environment `production` sin revisores (los despliegues corren sin pausa; recomendado: restringir *Deployment branches* a `main`, no verificado desde aquí); variables `AWS_DEPLOY_ROLE_ARN` y `VITE_VAPID_PUBLIC_KEY` (clave pública VAPID; `build` y `deploy` declaran el environment para poder leerlas).
+
+**Estado de las pruebas (22-oct-2026):** `Deploy` con `target=frontend` (run 3) y con `target=backend` (run 5) pasaron completos y se comprobaron por fuera (`version.json`, `/health`, login por CloudFront, respaldo en S3). `Rollback` aún no se ha ejecutado.
+
+**Lecciones aprendidas (errores que ya se corrigieron):**
+1. **Variables del environment:** una variable definida en el environment solo la ven los jobs que declaran `environment: production`; `build` la recibía vacía (PR 2).
+2. **Formato del `sub` de OIDC:** GitHub emite hoy `repo:mvevip@344858672/mvevip-leads-app@1428663966:environment:production` (con IDs inmutables), no el clásico `repo:mvevip/mvevip-leads-app:environment:production`. La confianza del rol acepta ambos. Si falla con `Not authorized to perform sts:AssumeRoleWithWebIdentity`, buscar el evento en CloudTrail (`AssumeRoleWithWebIdentity`, región `us-west-2`) y comparar `userName` con la condición `sub`.
+3. **Copias S3 a S3:** `aws s3 cp` consulta las etiquetas y exige `s3:GetObjectTagging`; se usa `--copy-props none` para no ampliar los permisos del rol.
+4. **Lockfile:** `server/package-lock.json` carecía de `fsevents`, lo que rechaza `npm ci` con npm 11 (Node 24); se regeneró sin cambiar versiones.
+5. **Fallos de autenticación lentos:** `configure-aws-credentials` reintenta cerca de 3 minutos antes de rendirse.
+6. **CloudTrail** tarda unos minutos en mostrar eventos: la prueba principal de un despliegue es el hash de la Lambda que verifica el propio workflow.
+
+**Cambios de esquema SQL:** el workflow no ejecuta SQL; los scripts de `deploy/migrations/` se siguen ejecutando a mano **antes** de desplegar (son compatibles con el código anterior).
 
 ---
 
@@ -369,9 +397,18 @@ El repositorio **no tiene pruebas automatizadas**. Durante la sesión del 21-oct
 | `61473c3` | Reintento sin historial ante bloqueos del filtro de Gemini; logs de diagnóstico del asistente y de push por dispositivo |
 | `07ece8e` | Frontend 1.0.7: calendario de lunes a domingo (5 AM a 12 AM); endpoint `PATCH /api/admin/users/:id/role` y botón de cambio de tipo de usuario; `client/package-lock.json` |
 
+### Sesión del 22-oct-2026 (despliegue con GitHub Actions)
+| Cambio | Detalle |
+|---|---|
+| PR 1 | `main` pasa a reflejar producción (1.0.7) y se agregan los workflows `ci`, `deploy` y `rollback`, `deploy/ci/` y `deploy/iam/` |
+| PR 2 | `build` declara `environment: production` para leer `VITE_VAPID_PUBLIC_KEY` |
+| PR 3 | Respaldos con `--copy-props none`; confianza del rol con el `sub` de IDs inmutables |
+| AWS | Proveedor OIDC de GitHub y rol `mvevip-leads-github-deploy` |
+| Despliegues | Frontend (run 3) y backend (run 5) desplegados con el flujo nuevo, sin cambios de código respecto a lo ya publicado |
+
 **Runtime:** la Lambda pasó de `nodejs20.x` a `nodejs24.x` (cambio solo de configuración, sin redeploy de código).
 
-**Despliegue de la 1.0.7 (21-oct-2026, 22:35 UTC):** backend por parche del zip (solo `adminController.js` y `api.js`; respaldo en `deployments/backup/lambda-backend-2026-10-21-pre-roles.zip`) y frontend compilado con Node 24 (idéntico byte a byte al compilado con Node 20) y subido a S3 con `no-cache` en `index.html`, `sw.js` y `version.json`; respaldo de los archivos anteriores en `deployments/backup/frontend-2026-10-21/`. El bundle se compila con `VITE_VAPID_PUBLIC_KEY` (la clave pública de la Lambda): el repo no la incluye (`client/.env.production` solo tiene `VITE_API_URL`), así que cualquier compilación fuera del contenedor debe definirla. Verificado: hash de la Lambda, `/health`, 0 errores, cron activo, `version.json` 1.0.7 y login sin errores de consola. Los cambios viven en la rama `claude/loving-mendel-okleeo` (aún no están en `main`).
+**Despliegue de la 1.0.7 (21-oct-2026, 22:35 UTC):** backend por parche del zip (solo `adminController.js` y `api.js`; respaldo en `deployments/backup/lambda-backend-2026-10-21-pre-roles.zip`) y frontend compilado con Node 24 (idéntico byte a byte al compilado con Node 20) y subido a S3 con `no-cache` en `index.html`, `sw.js` y `version.json`; respaldo de los archivos anteriores en `deployments/backup/frontend-2026-10-21/`. El bundle se compila con `VITE_VAPID_PUBLIC_KEY` (la clave pública de la Lambda): el repo no la incluye (`client/.env.production` solo tiene `VITE_API_URL`), así que cualquier compilación fuera del contenedor debe definirla. Verificado: hash de la Lambda, `/health`, 0 errores, cron activo, `version.json` 1.0.7 y login sin errores de consola. Esos cambios se integraron a `main` el 22-oct-2026 (PR 1, commit `8ddb480`).
 
 **Cambios en AWS y en la base de datos:** log group con retención de 30 días y permiso de logs en el rol; usuario IAM `mvevip-leads-media-signer`; variables de entorno nuevas; política del bucket con `Deny` a `uploads/*`; invalidación de `/uploads/*`; header `X-Origin-Verify` en `ApiGatewayOrigin`; 3 rutas con límites en el API Gateway; concurrencia reservada de 25; migración SQL 001.
 
@@ -382,7 +419,7 @@ El repositorio **no tiene pruebas automatizadas**. Durante la sesión del 21-oct
 ### 11.1. Pendientes, por prioridad
 | # | Pendiente | Detalle |
 |---|---|---|
-| 0 | **Despliegue controlado con GitHub Actions (EN CURSO: workflows escritos, falta configurar AWS y GitHub, ver 8.5)** | Hoy se despliega a mano (PowerShell/Docker o parche del zip desde la sesión de Claude). Objetivo: flujo en GitHub Actions con pruebas previas, entorno con aprobación manual, credenciales por OIDC hacia un rol de IAM mínimo (sin claves largas), respaldo automático del zip y de los archivos previos, verificación del hash, `/health` y logs tras el despliegue, y reversión con un clic. Incluye decidir si la rama `claude/loving-mendel-okleeo` se integra a `main` por PR. Compilar el frontend con `VITE_VAPID_PUBLIC_KEY` |
+| 0 | **Hecho el 22-oct-2026: despliegue con GitHub Actions (ver 8.5).** Faltan dos cosas | (a) Probar `Rollback` una vez con el respaldo más reciente. (b) Subir `checkout`, `setup-node`, `upload/download-artifact` y `configure-aws-credentials` a versiones que no usen Node 20 (hoy GitHub las fuerza a Node 24 con un aviso de deprecación). Opcional: volver a poner revisores requeridos en `production` si se suman colaboradores |
 | 1 | **Runtime Node 24: hecho en producción (21-oct-2026). Falta alinear los contenedores locales** | `server/Dockerfile` y `client/Dockerfile` siguen en `node:20-alpine`: pasarlos a `node:24-alpine` y recrear el volumen de `node_modules` (`docker compose up -d --build -V`). Contexto: `nodejs20.x` **ya estaba deprecado** (30-abr-2026): AWS puede dejar de aplicarle parches de seguridad y la función no tiene soporte técnico. Hitos oficiales: bloqueo de creación de funciones el 29-jul-2027 y **bloqueo de actualizaciones el 31-ago-2027** (después no se podría ni corregir un error). El SDK de AWS v3 exigirá Node 22 desde la primera semana de enero de 2027 (afecta solo a actualizaciones futuras del SDK). Se recomienda **Node 24** (soportado hasta el 30-abr-2028); `nodejs22.x` se deprecaría el 30-abr-2027. La cuenta ya tiene 12 funciones en Node 24 y 6 en Node 22. Revisión de compatibilidad hecha el 21-oct-2026: ver 11.3 |
 | 2 | **403 y 404 del API llegan como HTML con 200** | CloudFront tiene respuestas de error personalizadas (403/404 → `index.html`) que aplican también a `/api/*`. Afecta, por ejemplo, a los mensajes "No autorizado". Corregir con cuidado: la CloudFront Function es compartida |
 | 3 | **Rol compartido con `AmazonS3FullAccess`** | Crear un rol propio para esta función con acceso solo a `uploads/*` |
@@ -392,7 +429,7 @@ El repositorio **no tiene pruebas automatizadas**. Durante la sesión del 21-oct
 | 7 | **Frontend** | Validar 8 caracteres en el cambio de contraseña (hoy valida 6 en el navegador); las contraseñas temporales de alta de usuario las genera el navegador con `Math.random`; revocar las sesiones de otros dispositivos al cambiar la contraseña propia (requiere entregar un token nuevo); iconos PNG para PWA y notificaciones (`/icons/icon-192.png` y `badge-72.png` no existen); aviso cuando una imagen del chat expira |
 | 8 | **RDS expuesto** | `PubliclyAccessible=true` y un security group abierto a `0.0.0.0/0` en el 3306. Otros sistemas dependen de esa conexión: se resolverá en una sesión dedicada |
 | 9 | **Seed con credenciales** | `deploy/database_setup.sql` incluye el correo del administrador y el hash bcrypt de su contraseña temporal inicial. Rotar la contraseña y retirar el hash del repositorio |
-| 10 | **Pruebas automatizadas** | El repositorio no tiene pruebas; las de esta sesión viven fuera del repo. Incorporarlas (la CI/CD es el pendiente 0) |
+| 10 | **Pruebas automatizadas** | El repositorio no tiene pruebas; las de esta sesión viven fuera del repo. Incorporarlas: el CI de GitHub Actions (8.5) ya existe y es el lugar donde ejecutarlas |
 | 11 | **Código muerto** | `GeminiBotModal.jsx` y `ProjectCard.jsx` no se importan en ningún lugar; el valor `TRANSFERRED` del enum y las tablas de etiquetas no tienen uso; `/api/bot/conversation` duplica a `/api/bot/turn`; `vite-plugin-pwa` está instalado pero no se usa |
 | 12 | **Audio, WhatsApp, métricas en el chat, geolocalización** | Funcionalidades futuras (prioridad media a baja) |
 
