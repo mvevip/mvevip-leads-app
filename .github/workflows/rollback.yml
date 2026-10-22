@@ -46,7 +46,7 @@ jobs:
             --s3-bucket "$BUCKET" --s3-key "$key" --region "$AWS_REGION" > /dev/null
           aws lambda wait function-updated --function-name "$FUNCTION_NAME" --region "$AWS_REGION"
           # Dejar tambien el zip "actual" igual al revertido
-          aws s3 cp "s3://$BUCKET/$key" "s3://$BUCKET/deployments/lambda-backend.zip"
+          aws s3 cp "s3://$BUCKET/$key" "s3://$BUCKET/deployments/lambda-backend.zip" --copy-props none
 
       - name: Verificar
         if: inputs.backup_key != ''
