@@ -8,7 +8,21 @@
         "Service": "cloudfront.amazonaws.com"
       },
       "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::mvevip-leads/*"
+      "Resource": "arn:aws:s3:::mvevip-leads/*",
+      "Condition": {
+        "StringEquals": {
+          "AWS:SourceArn": "arn:aws:cloudfront::021891594659:distribution/E2FMW6HOSKOVMP"
+        }
+      }
+    },
+    {
+      "Sid": "DenyCloudFrontUploads",
+      "Effect": "Deny",
+      "Principal": {
+        "Service": "cloudfront.amazonaws.com"
+      },
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::mvevip-leads/uploads/*"
     }
   ]
 }

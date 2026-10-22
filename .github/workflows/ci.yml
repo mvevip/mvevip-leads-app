@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: server
+      - run: npx prisma generate
+        working-directory: server
+      - name: Sintaxis de todo el backend
+        working-directory: server
+        run: find lambda.js src -name '*.js' -print0 | xargs -0 -n1 node --check
+      - name: La app carga (con variables minimas)
+        working-directory: server
+        env:
+          JWT_SECRET: ci-secret-no-es-real
+          DATABASE_URL: mysql://u:p@localhost:3306/ci
+        run: node -e "require('./src/app'); console.log('app OK'); process.exit(0)"
+      - name: Empaquetado Lambda (verifica contenido del zip)
+        run: deploy/ci/package-lambda.sh "$RUNNER_TEMP/lambda-backend.zip"
+
+  client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: client
+      - run: npm run build
+        working-directory: client
+      - name: Las tres versiones coinciden (version.js, version.json, sw.js)
+        working-directory: client
+        run: |
+          v1=$(grep -oP "APP_VERSION = '\K[^']+" src/version.js)
+          v2=$(node -p "require('./public/version.json').version")
+          v3=$(grep -oP "CACHE_NAME = '[^']*v\K[0-9.]+" public/sw.js)
+          echo "version.js=$v1 version.json=$v2 sw.js=$v3"
+          [ "$v1" = "$v2" ] && [ "$v1" = "$v3" ]

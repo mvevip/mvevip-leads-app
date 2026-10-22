@@ -85,7 +85,12 @@ const sendTestNotification = async (req, res) => {
     };
 
     const result = await sendPushToUser(req.user.id, payload);
-    return res.json({ success: true, result });
+    return res.json({
+      success: Boolean(result?.success),
+      sentCount: result?.sentCount ?? 0,
+      failedCount: result?.failedCount ?? 0,
+      message: result?.success ? undefined : 'No hay dispositivos suscritos o no se pudo enviar la notificación'
+    });
   } catch (error) {
     console.error('Error enviando push de prueba:', error);
     return res.status(500).json({ error: 'Error en push de prueba' });

@@ -11,6 +11,8 @@ const reminderController = require('../controllers/reminderController');
 const botController = require('../controllers/botController');
 const adminController = require('../controllers/adminController');
 const pushController = require('../controllers/pushController');
+const { logError } = require('../utils/logger');
+const { requireCronSecret } = require('../middleware/cronAuth');
 
 // Multer en memoria para audio e imágenes
 const upload = multer({
@@ -48,19 +50,21 @@ router.post('/push/unsubscribe', authMiddleware, pushController.unsubscribe);
 router.post('/push/test', authMiddleware, pushController.sendTestNotification);
 
 // Ruta de Despacho Cron de Recordatorios (Invocada por EventBridge o llamada directa)
-router.get('/cron/check-reminders', async (req, res) => {
+router.get('/cron/check-reminders', requireCronSecret, async (req, res) => {
   try {
     const { checkAndNotifyDueReminders } = require('../services/cronScheduler');
     const result = await checkAndNotifyDueReminders();
     return res.json({ success: true, ...result });
   } catch (err) {
-    return res.status(500).json({ success: false, error: err.message });
+    logError('cron_route', err);
+    return res.status(500).json({ success: false, error: 'Error ejecutando el cron de recordatorios' });
   }
 });
 
 // Rutas de Administración (Solo ADMIN)
 router.get('/admin/users', authMiddleware, requireAdmin, adminController.getUsers);
 router.post('/admin/users', authMiddleware, requireAdmin, adminController.createUser);
+router.patch('/admin/users/:id/role', authMiddleware, requireAdmin, adminController.updateUserRole);
 router.patch('/admin/users/:id/toggle-status', authMiddleware, requireAdmin, adminController.toggleUserStatus);
 router.post('/admin/users/:id/reset-password', authMiddleware, requireAdmin, adminController.resetUserPassword);
 router.post('/admin/notifications', authMiddleware, requireAdmin, adminController.sendCustomNotification);

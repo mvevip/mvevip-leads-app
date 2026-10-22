@@ -1,5 +1,5 @@
 // Service Worker para MVEVIP Lead App (Web Push & Caching)
-const CACHE_NAME = 'mvevip-leads-v1.0.6';
+const CACHE_NAME = 'mvevip-leads-v1.0.7';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] Instalando versión', CACHE_NAME);

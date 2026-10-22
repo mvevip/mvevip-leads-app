@@ -2,6 +2,28 @@ const { processAssistantTurn } = require('../services/geminiService');
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const { uploadToS3 } = require('../services/s3Service');
+const { logError } = require('../utils/logger');
+const { getRequestId } = require('../utils/requestContext');
+const { hashKey, countEvents, recordEvent } = require('../utils/rateLimit');
+
+// Límite de mensajes al asistente por usuario (protege la cuota de Gemini)
+const BOT_WINDOW_MS = 60 * 1000;
+const BOT_MAX_MESSAGES_PER_WINDOW = 15;
+
+// Respuesta de error que el frontend muestra como un mensaje más del asistente (no se guarda en el historial)
+const buildErrorReply = (content, actions = []) => ({
+  success: true,
+  data: {
+    id: `err-${Date.now()}`,
+    role: 'assistant',
+    content,
+    mediaUrl: null,
+    images: [],
+    actions,
+    isError: true,
+    createdAt: new Date()
+  }
+});
 
 /**
  * Endpoint conversacional multi-turno con el Asistente IA permanente
@@ -16,6 +38,12 @@ const handleConversationTurn = async (req, res) => {
     if (!message && !fileBuffer) {
       return res.status(400).json({ error: 'Debes enviar un mensaje, nota de voz o imagen.' });
     }
+
+    const botBucket = hashKey('bot', user.id);
+    if (await countEvents(botBucket, BOT_WINDOW_MS) >= BOT_MAX_MESSAGES_PER_WINDOW) {
+      return res.json(buildErrorReply('Estás enviando mensajes muy rápido. Espera unos segundos e inténtalo de nuevo.'));
+    }
+    await recordEvent(botBucket);
 
     // 1. Si adjuntó archivo, guardar en S3 o generar data URI
     let userMediaUrl = null;
@@ -44,7 +72,7 @@ const handleConversationTurn = async (req, res) => {
       take: 12
     });
     // Reordenar ascendente para el modelo
-    const history = dbHistory.reverse().map(m => ({
+    const history = dbHistory.reverse().filter(m => m.content && m.content.trim()).map(m => ({
       role: m.role,
       content: m.content
     }));
@@ -58,6 +86,12 @@ const handleConversationTurn = async (req, res) => {
       mimeType,
       new Date()
     );
+
+    // Si el turno falló, se responde con un mensaje amable pero NO se guarda en el historial
+    // (evita contaminar el contexto que se reenvía a Gemini en los siguientes turnos)
+    if (turnResult.isError) {
+      return res.json(buildErrorReply(turnResult.reply, turnResult.actions || []));
+    }
 
     // 5. Determinar mediaUrl del bot si devolvió imágenes de leads consultados
     const botMediaUrl = turnResult.images && turnResult.images.length > 0 ? turnResult.images[0] : null;
@@ -86,8 +120,9 @@ const handleConversationTurn = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error en handleConversationTurn:', error);
-    return res.status(500).json({ error: 'Error procesando consulta del asistente', detail: error.message });
+    const requestId = getRequestId();
+    logError('bot_turn', error, { requestId, userId: req.user?.id });
+    return res.status(500).json({ error: 'Error procesando consulta del asistente', requestId });
   }
 };
 
@@ -97,7 +132,8 @@ const handleConversationTurn = async (req, res) => {
 const getChatHistory = async (req, res) => {
   try {
     const messages = await prisma.chatMessage.findMany({
-      where: { userId: req.user.id },
+      // Se omiten las respuestas del asistente vacías guardadas por un fallo anterior
+      where: { userId: req.user.id, NOT: { role: 'assistant', content: '' } },
       orderBy: { createdAt: 'asc' },
       take: 60
     });

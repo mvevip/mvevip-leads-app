@@ -1,5 +1,5 @@
 {
-  "version": "1.0.6",
-  "buildTime": "2026-10-12T22:10:00Z",
-  "notes": "Asistente IA en panel izquierdo y Calendario/Agenda en panel derecho en estación de trabajo Desktop"
+  "version": "1.0.7",
+  "buildTime": "2026-10-21T23:00:00Z",
+  "notes": "Agenda de lunes a domingo de 5 AM a 12 AM y cambio de tipo de usuario (Administrador/Asesor) en el panel de usuarios"
 }

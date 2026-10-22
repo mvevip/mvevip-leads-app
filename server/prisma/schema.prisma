@@ -52,6 +52,8 @@ model User {
   isActive           Boolean  @default(true)
   mustChangePassword Boolean  @default(false)
   isFirstLogin       Boolean  @default(true)
+  // Versión de sesión: se incrementa al resetear la contraseña desde el panel admin y revoca los tokens anteriores
+  tokenVersion       Int      @default(0)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -158,4 +160,15 @@ model ReminderTag {
 
   @@id([reminderId, tagId])
   @@map("reminder_tags")
+}
+
+// Contadores del límite de intentos (login y asistente). Se consulta con SQL directo (utils/rateLimit.js);
+// el modelo documenta la tabla creada con deploy/migrations/001_rate_limit_and_token_version.sql
+model RateLimitEvent {
+  id        BigInt   @id @default(autoincrement())
+  bucket    String
+  createdAt DateTime @default(now()) @db.DateTime(3)
+
+  @@index([bucket, createdAt])
+  @@map("rate_limit_events")
 }

@@ -2,6 +2,13 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const bcrypt = require('bcryptjs');
 const { sendBroadcastPush, sendPushToUser } = require('../services/webPushService');
+const { normalizeMediaUrl } = require('../services/s3Service');
+const { validatePassword, generateTempPassword } = require('../utils/passwords');
+const { bumpTokenVersion } = require('../utils/sessionVersion');
+const { logInfo, logError } = require('../utils/logger');
+
+const VALID_ROLES = ['ADMIN', 'ASESOR'];
+const ROLE_LABELS = { ADMIN: 'Administrador', ASESOR: 'Asesor Comercial' };
 
 /**
  * Listar todos los usuarios / asesores (con soporte para filtro active/inactive)
@@ -53,6 +60,15 @@ const createUser = async (req, res) => {
       return res.status(400).json({ error: 'Nombre, correo electrónico y contraseña inicial son obligatorios' });
     }
 
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+      return res.status(400).json({ error: passwordError });
+    }
+
+    if (!VALID_ROLES.includes(role)) {
+      return res.status(400).json({ error: 'El tipo de usuario debe ser ADMIN o ASESOR' });
+    }
+
     const existing = await prisma.user.findUnique({
       where: { email: email.toLowerCase().trim() }
     });
@@ -69,7 +85,7 @@ const createUser = async (req, res) => {
         passwordHash,
         role,
         phone,
-        avatarUrl: avatarUrl || null,
+        avatarUrl: avatarUrl ? normalizeMediaUrl(avatarUrl) : null,
         isActive: true,
         mustChangePassword: true, // Nuevo usuario debe cambiar clave
         isFirstLogin: true // Nuevo usuario debe registrar o omitir foto
@@ -95,6 +111,77 @@ const createUser = async (req, res) => {
   } catch (error) {
     console.error('Error creando usuario:', error);
     return res.status(500).json({ error: 'Error al crear usuario' });
+  }
+};
+
+/**
+ * Cambiar el tipo de usuario (ADMIN <-> ASESOR).
+ * Protecciones: no se puede cambiar el propio rol y no se puede degradar al último administrador activo.
+ * El servidor decide los permisos por el rol guardado en la base de datos en cada petición, por lo que el cambio
+ * aplica de inmediato. Además se cierran las sesiones del usuario (tokenVersion) para que su pantalla muestre los
+ * permisos nuevos al volver a entrar, y se le avisa con una notificación.
+ */
+const updateUserRole = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { role } = req.body;
+
+    if (!VALID_ROLES.includes(role)) {
+      return res.status(400).json({ error: 'El tipo de usuario debe ser ADMIN o ASESOR' });
+    }
+
+    if (id === req.user.id) {
+      return res.status(400).json({ error: 'No puedes cambiar tu propio tipo de usuario' });
+    }
+
+    const targetUser = await prisma.user.findUnique({ where: { id } });
+    if (!targetUser) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    if (targetUser.role === role) {
+      return res.json({
+        message: `El usuario ya tiene el perfil de ${ROLE_LABELS[role]}`,
+        user: { id: targetUser.id, name: targetUser.name, email: targetUser.email, role: targetUser.role, isActive: targetUser.isActive },
+        changed: false
+      });
+    }
+
+    if (targetUser.role === 'ADMIN' && targetUser.isActive) {
+      const otherActiveAdmins = await prisma.user.count({
+        where: { role: 'ADMIN', isActive: true, id: { not: id } }
+      });
+      if (otherActiveAdmins === 0) {
+        return res.status(400).json({ error: 'No se puede degradar al último administrador activo' });
+      }
+    }
+
+    const previousRole = targetUser.role;
+    const updated = await prisma.user.update({
+      where: { id },
+      data: { role },
+      select: { id: true, name: true, email: true, role: true, isActive: true }
+    });
+
+    // Cierra las sesiones abiertas del usuario y le avisa del cambio
+    const sessionsClosed = await bumpTokenVersion(id);
+    await sendPushToUser(id, {
+      title: 'Tu perfil fue actualizado',
+      body: `Ahora tienes el perfil de ${ROLE_LABELS[role]}. Vuelve a iniciar sesión para ver tus nuevos permisos.`,
+      url: '/'
+    });
+
+    logInfo('role_changed', { actorId: req.user.id, targetId: id, from: previousRole, to: role, sessionsClosed });
+
+    return res.json({
+      message: `${updated.name} ahora es ${ROLE_LABELS[role]}`,
+      user: updated,
+      changed: true,
+      sessionsClosed
+    });
+  } catch (error) {
+    logError('admin_update_role', error, { actorId: req.user?.id, targetId: req.params?.id });
+    return res.status(500).json({ error: 'Error al cambiar el tipo de usuario' });
   }
 };
 
@@ -149,8 +236,14 @@ const resetUserPassword = async (req, res) => {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
-    // Si no se envía contraseña, generar una aleatoria fácil de compartir
-    const generatedPass = newPassword || 'MVEVIP' + Math.floor(1000 + Math.random() * 9000);
+    // Si no se envía contraseña, generar una aleatoria (criptográficamente segura) fácil de compartir
+    if (newPassword) {
+      const passwordError = validatePassword(newPassword);
+      if (passwordError) {
+        return res.status(400).json({ error: passwordError });
+      }
+    }
+    const generatedPass = newPassword || generateTempPassword();
     const passwordHash = await bcrypt.hash(generatedPass, 10);
 
     await prisma.user.update({
@@ -160,6 +253,9 @@ const resetUserPassword = async (req, res) => {
         mustChangePassword: true // Forzar al usuario a cambiarla al entrar
       }
     });
+
+    // Cierra las sesiones abiertas de ese usuario: los tokens anteriores dejan de ser válidos
+    await bumpTokenVersion(id);
 
     return res.json({
       message: 'Contraseña reseteada con éxito',
@@ -201,7 +297,8 @@ const sendCustomNotification = async (req, res) => {
     return res.json({
       success: true,
       message: 'Notificación procesada',
-      details: result
+      sentCount: result?.sentCount ?? 0,
+      failedCount: result?.failedCount ?? 0
     });
   } catch (error) {
     console.error('Error enviando notificación administrativa:', error);
@@ -236,6 +333,7 @@ const getAdminStats = async (req, res) => {
 module.exports = {
   getUsers,
   createUser,
+  updateUserRole,
   toggleUserStatus,
   resetUserPassword,
   sendCustomNotification,

@@ -1,8 +1,8 @@
 const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
-
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_mvevip_lead';
+const { JWT_SECRET } = require('../utils/jwtConfig');
+const { getTokenVersion } = require('../utils/sessionVersion');
 
 const authMiddleware = async (req, res, next) => {
   try {
@@ -30,6 +30,13 @@ const authMiddleware = async (req, res, next) => {
 
     if (!user || !user.isActive) {
       return res.status(401).json({ error: 'Usuario no encontrado o cuenta desactivada' });
+    }
+
+    // Sesión revocada (p. ej. el administrador reseteó la contraseña): los tokens anteriores dejan de servir.
+    // Si la versión no se puede leer (null) no se invalida ninguna sesión.
+    const currentVersion = await getTokenVersion(user.id);
+    if (currentVersion !== null && (decoded.tokenVersion ?? 0) !== currentVersion) {
+      return res.status(401).json({ error: 'La sesión ya no es válida. Por favor ingrese nuevamente' });
     }
 
     req.user = user;

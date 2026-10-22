@@ -1,6 +1,22 @@
 const webpush = require('web-push');
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
+const { logWarn, logError } = require('../utils/logger');
+
+// Registra los envíos push fallidos por dispositivo (sin el endpoint ni el contenido de la notificación)
+const logFailedDeliveries = (results, context = {}) => {
+  results.forEach((result) => {
+    if (result.status === 'rejected') {
+      const statusCode = result.reason && result.reason.statusCode;
+      logWarn('push_delivery_failed', {
+        ...context,
+        statusCode,
+        subscriptionRemoved: statusCode === 410 || statusCode === 404,
+        errorName: result.reason && result.reason.name
+      });
+    }
+  });
+};
 
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
@@ -50,13 +66,15 @@ const sendPushToUser = async (userId, payload) => {
       })
     );
 
+    logFailedDeliveries(results, { userId });
+
     return {
       success: true,
       sentCount: results.filter((r) => r.status === 'fulfilled').length,
       failedCount: results.filter((r) => r.status === 'rejected').length
     };
   } catch (error) {
-    console.error('Error enviando notificación Push:', error);
+    logError('push_send', error, { userId });
     return { success: false, error: error.message };
   }
 };
@@ -86,13 +104,15 @@ const sendBroadcastPush = async (payload) => {
       })
     );
 
+    logFailedDeliveries(results, { broadcast: true });
+
     return {
       success: true,
       sentCount: results.filter((r) => r.status === 'fulfilled').length,
       failedCount: results.filter((r) => r.status === 'rejected').length
     };
   } catch (error) {
-    console.error('Error enviando Broadcast Push:', error);
+    logError('push_broadcast', error);
     return { success: false, error: error.message };
   }
 };

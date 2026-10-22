@@ -2,8 +2,112 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const { uploadToS3 } = require('./s3Service');
+const { logError, logWarn, logInfo } = require('../utils/logger');
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+// Límites de tiempo: API Gateway y Lambda cortan a los 30 s, por lo que se responde antes con un mensaje amable
+const TURN_BUDGET_MS = 24000;        // Presupuesto total de un turno (varias llamadas a Gemini + herramientas)
+const CALL_TIMEOUT_MS = 15000;       // Timeout máximo por llamada a Gemini
+const RETRY_DELAY_MS = 1000;         // Espera antes del único reintento ante 429/503
+const RETRY_MIN_REMAINING_MS = 8000; // Solo se reintenta si queda al menos este tiempo de presupuesto
+
+// Mensajes naturales para el usuario: el detalle técnico solo se registra en los logs
+const USER_ERROR_MESSAGES = {
+  timeout: 'Tardé demasiado en responder. ¿Puedes intentarlo de nuevo?',
+  overloaded: 'El asistente está con mucha demanda en este momento. Intenta de nuevo en unos segundos.',
+  blocked: 'No pude procesar ese contenido. ¿Puedes reformular tu mensaje o enviar otra imagen?',
+  empty: 'No logré armar una respuesta con esa consulta. ¿Puedes reformularla o darme más detalle?',
+  generic: 'Tuve un inconveniente al procesar tu solicitud. Intenta de nuevo en un momento.'
+};
+
+const WRITE_TOOLS = ['update_reminder', 'add_followup_note', 'create_reminder'];
+
+// Máximo de rondas de herramientas por turno; si el modelo sigue pidiendo herramientas, se le fuerza a responder con lo obtenido
+const MAX_TOOL_ROUNDS = 3;
+const FORCE_ANSWER_PROMPT = 'Con la información que ya obtuviste, responde ahora al usuario de forma clara y natural. No llames más herramientas.';
+
+// Los días se calculan siempre en hora de Quito (Ecuador no usa horario de verano: UTC-5 todo el año),
+// sin depender de la zona horaria del servidor
+const QUITO_UTC_OFFSET_HOURS = 5;
+
+/** Fecha (YYYY-MM-DD) de un instante en hora de Quito */
+const quitoDateString = (date) => new Date(date.getTime() - QUITO_UTC_OFFSET_HOURS * 3600 * 1000).toISOString().slice(0, 10);
+
+/** Rango [inicio, fin] de un día (YYYY-MM-DD) en hora de Quito; null si la fecha no es válida */
+const quitoDayRange = (dateString) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateString || '')) return null;
+  const start = new Date(`${dateString}T00:00:00.000-05:00`);
+  if (Number.isNaN(start.getTime())) return null;
+  return { start, end: new Date(start.getTime() + 24 * 3600 * 1000 - 1) };
+};
+
+/** Parámetros de una llamada a herramienta aptos para logs (sin nombres, teléfonos ni textos de clientes) */
+const describeToolCall = ({ tool, args = {} }) => ({
+  tool,
+  filter: args.filter,
+  dateString: args.dateString,
+  allAdvisors: args.allAdvisors,
+  hasQuery: Boolean(args.query || args.clientName)
+});
+
+/**
+ * Clasifica un error del SDK de Gemini en una categoría y si vale la pena reintentar.
+ * 429 (cuota) y 503 (sobrecarga) son reintentables; clave inválida, contenido bloqueado, etc. no.
+ */
+const classifyGeminiError = (error) => {
+  const status = error?.status;
+  // Las clases de error del SDK no redefinen `name` (queda "Error"), por eso se compara el nombre del constructor
+  const errorClass = error?.constructor?.name;
+  if (error?.name === 'AbortError' || errorClass === 'GoogleGenerativeAIAbortError' || error?.name === 'TurnBudgetExceededError') {
+    return { kind: 'timeout', retryable: false };
+  }
+  if (status === 429 || status === 503) {
+    return { kind: 'overloaded', retryable: true };
+  }
+  if (status >= 500 && status < 600) {
+    return { kind: 'overloaded', retryable: false };
+  }
+  if (error?.response?.promptFeedback?.blockReason || /SAFETY|blocked/i.test(error?.message || '')) {
+    return { kind: 'blocked', retryable: false };
+  }
+  if (error?.name === 'EmptyReplyError') {
+    return { kind: 'empty', retryable: false };
+  }
+  return { kind: 'generic', retryable: false };
+};
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Llama a Gemini con timeout por llamada, respetando el presupuesto total del turno (deadline)
+ * y con un único reintento ante 429/503 si queda tiempo suficiente.
+ */
+const callGemini = async (model, contents, deadline, logContext, extraRequest = {}) => {
+  let retried = false;
+
+  while (true) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 1000) {
+      const err = new Error('Presupuesto de tiempo del turno agotado');
+      err.name = 'TurnBudgetExceededError';
+      throw err;
+    }
+
+    try {
+      return await model.generateContent({ contents, ...extraRequest }, { timeout: Math.min(CALL_TIMEOUT_MS, remaining) });
+    } catch (error) {
+      const { kind, retryable } = classifyGeminiError(error);
+      const canRetry = retryable && !retried && (deadline - Date.now()) > RETRY_MIN_REMAINING_MS;
+      if (!canRetry) {
+        throw error;
+      }
+      retried = true;
+      logError('gemini_retry', error, { ...logContext, kind });
+      await sleep(RETRY_DELAY_MS);
+    }
+  }
+};
 
 let genAI = null;
 if (GEMINI_API_KEY && GEMINI_API_KEY.trim() !== '') {
@@ -266,26 +370,19 @@ async function executeTool(toolName, args, user, referenceDate) {
       const assignedFilter = await resolveAssignedFilter();
       let where = { ...assignedFilter };
 
-      const startOfDay = new Date(referenceDate);
-      startOfDay.setHours(0, 0, 0, 0);
-      const endOfDay = new Date(referenceDate);
-      endOfDay.setHours(23, 59, 59, 999);
+      const todayRange = quitoDayRange(quitoDateString(referenceDate));
 
       if (filter === 'today') {
-        where.scheduledAt = { gte: startOfDay, lte: endOfDay };
+        where.scheduledAt = { gte: todayRange.start, lte: todayRange.end };
       } else if (filter === 'pending_all') {
         where.status = 'PENDING';
       } else if (filter === 'completed') {
         where.status = 'COMPLETED';
       }
 
-      if (args.dateString) {
-        const targetDate = new Date(args.dateString + 'T00:00:00.000Z');
-        const startTarget = new Date(targetDate);
-        startTarget.setHours(0, 0, 0, 0);
-        const endTarget = new Date(targetDate);
-        endTarget.setHours(23, 59, 59, 999);
-        where.scheduledAt = { gte: startTarget, lte: endTarget };
+      const targetRange = quitoDayRange(args.dateString);
+      if (targetRange) {
+        where.scheduledAt = { gte: targetRange.start, lte: targetRange.end };
       }
 
       const reminders = await prisma.reminder.findMany({
@@ -513,8 +610,8 @@ async function executeTool(toolName, args, user, referenceDate) {
 
     return { error: `Herramienta ${toolName} no reconocida.` };
   } catch (error) {
-    console.error(`Error ejecutando tool ${toolName}:`, error);
-    return { error: error.message };
+    logError(`tool:${toolName}`, error, { userId: user?.id });
+    return { error: 'No se pudo completar la operación solicitada.' };
   }
 }
 
@@ -523,14 +620,24 @@ async function executeTool(toolName, args, user, referenceDate) {
  */
 const processAssistantTurn = async (user, history = [], newMessage = '', fileBuffer = null, mimeType = null, referenceDate = new Date()) => {
   if (!genAI) {
+    logError('gemini_not_configured', new Error('GEMINI_API_KEY no configurada o cliente no inicializado'), { userId: user?.id });
     return {
-      reply: 'El servicio de IA no está disponible en este momento. Revisa la configuración de GEMINI_API_KEY.',
-      actions: []
+      reply: USER_ERROR_MESSAGES.generic,
+      actions: [],
+      isError: true
     };
   }
 
   // Usar modelo gemini-3.8-flash con soporte completo multimodal y tool calling
   const modelName = 'gemini-3.8-flash';
+
+  const startedAt = Date.now();
+  const deadline = startedAt + TURN_BUDGET_MS;
+  const logContext = { userId: user?.id, model: modelName };
+  const executedActions = [];
+  let geminiCalls = 0;
+  let retriedWithoutHistory = false;
+  const recentHistoryCount = Array.isArray(history) ? Math.min(history.length, 10) : 0;
 
   try {
     const model = genAI.getGenerativeModel({
@@ -545,31 +652,7 @@ const processAssistantTurn = async (user, history = [], newMessage = '', fileBuf
       .replace('{USER_ROLE}', user?.role || 'ASESOR')
       .replace('{USER_ID}', user?.id || '');
 
-    const contents = [];
-
-    // System prompt como primer mensaje
-    contents.push({
-      role: 'user',
-      parts: [{ text: systemInstruction }]
-    });
-
-    contents.push({
-      role: 'model',
-      parts: [{ text: 'Entendido. Soy tu asistente comercial. Estoy listo para ayudarte a gestionar tus citas, clientes y compromisos de forma ágil y natural.' }]
-    });
-
-    // Inyectar historial previo (últimos 10 mensajes para mantener contexto ágil)
-    if (history && history.length > 0) {
-      const recent = history.slice(-10);
-      for (const msg of recent) {
-        contents.push({
-          role: msg.role === 'assistant' || msg.role === 'model' ? 'model' : 'user',
-          parts: [{ text: msg.content || msg.text || '' }]
-        });
-      }
-    }
-
-    // Preparar mensaje actual del usuario
+    // Mensaje actual del usuario (con su archivo adjunto, si lo hay)
     const currentParts = [];
     if (fileBuffer && mimeType) {
       currentParts.push({
@@ -587,28 +670,63 @@ const processAssistantTurn = async (user, history = [], newMessage = '', fileBuf
       currentParts.push({ text: newMessage || 'Hola' });
     }
 
-    contents.push({
-      role: 'user',
-      parts: currentParts
-    });
+    // Contexto enviado al modelo: instrucciones del sistema, historial reciente (últimos 10 mensajes) y el mensaje actual
+    const buildContents = (historyMessages) => {
+      const built = [
+        { role: 'user', parts: [{ text: systemInstruction }] },
+        { role: 'model', parts: [{ text: 'Entendido. Soy tu asistente comercial. Estoy listo para ayudarte a gestionar tus citas, clientes y compromisos de forma ágil y natural.' }] }
+      ];
+      for (const msg of (historyMessages || []).slice(-10)) {
+        built.push({
+          role: msg.role === 'assistant' || msg.role === 'model' ? 'model' : 'user',
+          parts: [{ text: msg.content || msg.text || '' }]
+        });
+      }
+      built.push({ role: 'user', parts: currentParts });
+      return built;
+    };
+
+    let contents = buildContents(history);
 
     // 1. Primera llamada a Gemini (puede retornar texto o llamada a herramienta)
-    let response = await model.generateContent({ contents });
-    let functionCalls = response.response.functionCalls();
+    geminiCalls++;
+    let response;
+    let functionCalls;
+    try {
+      response = await callGemini(model, contents, deadline, logContext);
+      functionCalls = response.response.functionCalls();
+    } catch (firstCallError) {
+      // El filtro de contenido de Gemini evalúa todo el contexto y puede dar falsos positivos por mensajes antiguos del historial.
+      // Si bloquea el primer llamado (aún no se ejecutó ninguna herramienta, nada se duplica), se reintenta una vez sin historial.
+      const { kind } = classifyGeminiError(firstCallError);
+      if (kind !== 'blocked' || recentHistoryCount === 0 || executedActions.length > 0) {
+        throw firstCallError;
+      }
+      logWarn('gemini_blocked_retry', {
+        ...logContext,
+        blockReason: firstCallError?.response?.promptFeedback?.blockReason,
+        historyMessages: recentHistoryCount,
+        hasFile: Boolean(fileBuffer),
+        fileType: mimeType ? mimeType.split('/')[0] : undefined
+      });
+      retriedWithoutHistory = true;
+      contents = buildContents([]);
+      geminiCalls++;
+      response = await callGemini(model, contents, deadline, logContext);
+      functionCalls = response.response.functionCalls();
+    }
 
-    const executedActions = [];
     let leadImages = [];
 
     // 2. Bucle de ejecución de herramientas (soporta hasta 3 llamadas encadenadas)
     let turns = 0;
-    while (functionCalls && functionCalls.length > 0 && turns < 3) {
+    while (functionCalls && functionCalls.length > 0 && turns < MAX_TOOL_ROUNDS) {
       turns++;
       contents.push(response.response.candidates[0].content);
 
       const toolResponseParts = [];
 
       for (const call of functionCalls) {
-        console.log(`🤖 Gemini invocó herramienta: ${call.name} con args:`, call.args);
         const result = await executeTool(call.name, call.args, user, referenceDate);
         executedActions.push({ tool: call.name, args: call.args, result });
 
@@ -634,11 +752,44 @@ const processAssistantTurn = async (user, history = [], newMessage = '', fileBuf
       });
 
       // Llamar a Gemini nuevamente con los resultados de la base de datos
-      response = await model.generateContent({ contents });
+      geminiCalls++;
+      response = await callGemini(model, contents, deadline, logContext);
       functionCalls = response.response.functionCalls();
     }
 
-    const replyText = response.response.text();
+    let replyText = response.response.text();
+
+    // Sin texto (el modelo agotó las rondas pidiendo más herramientas, o respondió vacío): se le pide una última
+    // respuesta sin herramientas con lo ya obtenido. Nunca se entrega ni se guarda una respuesta vacía.
+    let forcedAnswer = false;
+    if (!replyText || !replyText.trim()) {
+      forcedAnswer = true;
+      geminiCalls++;
+      const forced = await callGemini(
+        model,
+        [...contents, { role: 'user', parts: [{ text: FORCE_ANSWER_PROMPT }] }],
+        deadline,
+        logContext,
+        { toolConfig: { functionCallingConfig: { mode: 'NONE' } } }
+      );
+      replyText = forced.response.text();
+      if (!replyText || !replyText.trim()) {
+        const emptyError = new Error('El modelo no devolvió texto de respuesta');
+        emptyError.name = 'EmptyReplyError';
+        throw emptyError;
+      }
+    }
+
+    logInfo('assistant_turn', {
+      ...logContext,
+      durationMs: Date.now() - startedAt,
+      geminiCalls,
+      forcedAnswer,
+      retriedWithoutHistory,
+      tools: executedActions.map((a) => a.tool),
+      calls: executedActions.map(describeToolCall),
+      hasFile: Boolean(fileBuffer)
+    });
 
     return {
       reply: replyText,
@@ -646,10 +797,31 @@ const processAssistantTurn = async (user, history = [], newMessage = '', fileBuf
       images: leadImages.filter(Boolean)
     };
   } catch (error) {
-    console.error('Error en processAssistantTurn:', error);
+    const { kind } = classifyGeminiError(error);
+    logError('assistant_turn', error, {
+      ...logContext,
+      kind,
+      blockReason: error?.response?.promptFeedback?.blockReason,
+      hasFile: Boolean(fileBuffer),
+      fileType: mimeType ? mimeType.split('/')[0] : undefined,
+      historyMessages: retriedWithoutHistory ? 0 : recentHistoryCount,
+      retriedWithoutHistory,
+      durationMs: Date.now() - startedAt,
+      geminiCalls,
+      tools: executedActions.map((a) => a.tool),
+      calls: executedActions.map(describeToolCall)
+    });
+
+    // Si ya se ejecutó alguna escritura exitosa antes del fallo, no se pierde: se avisa y se devuelven las acciones para refrescar la agenda
+    const wroteData = executedActions.some((a) => WRITE_TOOLS.includes(a.tool) && a.result?.success);
+    const reply = wroteData
+      ? 'Registré tu solicitud, pero tardé en confirmártelo. Revisa tu agenda para verificarla.'
+      : USER_ERROR_MESSAGES[kind] || USER_ERROR_MESSAGES.generic;
+
     return {
-      reply: `He registrado tu solicitud, pero hubo un detalle al consultar el modelo de IA: ${error.message}. Por favor intenta de nuevo.`,
-      actions: []
+      reply,
+      actions: executedActions,
+      isError: true
     };
   }
 };

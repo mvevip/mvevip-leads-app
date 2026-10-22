@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import api from '../services/api';
-import { UserPlus, UserX, UserCheck, KeyRound, Check, X, Shield, Share2 } from 'lucide-react';
+import { UserPlus, UserX, UserCheck, UserCog, KeyRound, Check, X, Shield, Share2 } from 'lucide-react';
 import UserAvatar from './UserAvatar';
+import { useAuth } from '../context/AuthContext';
 
 export default function AdminUserManagementModal({ isOpen, onClose, onUserUpdated, users = [], onRefreshUsers }) {
+  const { user: currentUser } = useAuth();
   const [filterActive, setFilterActive] = useState('ALL'); // 'ALL', 'ACTIVE', 'INACTIVE'
   const [isCreating, setIsCreating] = useState(false);
   const [credentialsModal, setCredentialsModal] = useState(null); // { name, email, tempPassword, link }
@@ -75,6 +77,27 @@ export default function AdminUserManagementModal({ isOpen, onClose, onUserUpdate
       onRefreshUsers();
     } catch (err) {
       alert(err.response?.data?.error || 'Error al cambiar estado');
+    }
+  };
+
+  // Cambiar el tipo de usuario (Administrador <-> Asesor)
+  const handleChangeRole = async (user) => {
+    const newRole = user.role === 'ADMIN' ? 'ASESOR' : 'ADMIN';
+    const newRoleLabel = newRole === 'ADMIN' ? 'Administrador' : 'Asesor Comercial';
+    const consequence = newRole === 'ADMIN'
+      ? 'Podrá ver y gestionar los recordatorios de todo el equipo y administrar usuarios.'
+      : 'Solo podrá ver y gestionar sus propios recordatorios y perderá el acceso a la administración.';
+
+    if (!window.confirm(`¿Cambiar a ${user.name} a ${newRoleLabel}?\n\n${consequence}\n\nSe cerrará su sesión y deberá volver a iniciar sesión.`)) {
+      return;
+    }
+
+    try {
+      const res = await api.patch(`/admin/users/${user.id}/role`, { role: newRole });
+      onRefreshUsers();
+      alert(res.data?.message || `Tipo de usuario actualizado a ${newRoleLabel}`);
+    } catch (err) {
+      alert(err.response?.data?.error || 'Error al cambiar el tipo de usuario');
     }
   };
 
@@ -299,6 +322,17 @@ export default function AdminUserManagementModal({ isOpen, onClose, onUserUpdate
               {/* Botonera de Gestión por Usuario */}
               <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-end gap-1.5">
                 
+                {/* Cambiar tipo de usuario (no se puede cambiar el propio) */}
+                <button
+                  onClick={() => handleChangeRole(u)}
+                  disabled={u.id === currentUser?.id}
+                  className="py-1 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-slate-100"
+                  title={u.id === currentUser?.id ? 'No puedes cambiar tu propio tipo de usuario' : (u.role === 'ADMIN' ? 'Convertir en Asesor Comercial' : 'Convertir en Administrador')}
+                >
+                  <UserCog className="w-3 h-3 text-purple-600" />
+                  <span>{u.role === 'ADMIN' ? 'Pasar a Asesor' : 'Pasar a Administrador'}</span>
+                </button>
+
                 {/* Resetear Contraseña */}
                 <button
                   onClick={() => handleResetPassword(u)}
