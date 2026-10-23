@@ -35,6 +35,12 @@ jobs:
           JWT_SECRET: ci-secret-no-es-real
           DATABASE_URL: mysql://u:p@localhost:3306/ci
         run: node -e "require('./src/app'); console.log('app OK'); process.exit(0)"
+      - name: Pruebas automáticas (node --test, sin llamar a servicios reales)
+        working-directory: server
+        env:
+          JWT_SECRET: ci-secret-no-es-real
+          DATABASE_URL: mysql://u:p@localhost:3306/ci
+        run: npm test
       - name: Empaquetado Lambda (verifica contenido del zip)
         run: deploy/ci/package-lambda.sh "$RUNNER_TEMP/lambda-backend.zip"
 

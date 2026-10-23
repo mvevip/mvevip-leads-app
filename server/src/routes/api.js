@@ -69,5 +69,9 @@ router.patch('/admin/users/:id/toggle-status', authMiddleware, requireAdmin, adm
 router.post('/admin/users/:id/reset-password', authMiddleware, requireAdmin, adminController.resetUserPassword);
 router.post('/admin/notifications', authMiddleware, requireAdmin, adminController.sendCustomNotification);
 router.get('/admin/stats', authMiddleware, requireAdmin, adminController.getAdminStats);
+router.get('/admin/chatrace/status', authMiddleware, requireAdmin, adminController.getChatraceStatus);
+router.get('/admin/chatrace/tags', authMiddleware, requireAdmin, adminController.getChatraceTags);
+router.put('/admin/chatrace/fixed-tag', authMiddleware, requireAdmin, adminController.setChatraceFixedTag);
+router.put('/admin/users/:id/chatrace-tag', authMiddleware, requireAdmin, adminController.setUserChatraceTag);
 
 module.exports = router;

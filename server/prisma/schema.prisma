@@ -172,3 +172,15 @@ model RateLimitEvent {
   @@index([bucket, createdAt])
   @@map("rate_limit_events")
 }
+
+// Configuración clave/valor de la app (hoy: etiquetas de la integración con Chatrace).
+// Documenta la tabla creada con deploy/migrations/002_chatrace.sql (se ejecuta a mano, antes de desplegar).
+// Claves: chatrace.fixed_tag y chatrace.advisor_tag.<userId>
+model AppSetting {
+  settingKey   String   @id
+  settingValue String   @db.VarChar(500)
+  updatedAt    DateTime @default(now()) @updatedAt @db.DateTime(3)
+  updatedBy    String?
+
+  @@map("app_settings")
+}
