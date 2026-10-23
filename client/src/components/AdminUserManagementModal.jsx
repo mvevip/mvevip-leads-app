@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import api from '../services/api';
-import { UserPlus, UserX, UserCheck, UserCog, KeyRound, Check, X, Shield, Share2 } from 'lucide-react';
+import { UserPlus, UserX, UserCheck, UserCog, KeyRound, Check, X, Shield, Share2, Tag } from 'lucide-react';
 import UserAvatar from './UserAvatar';
 import { useAuth } from '../context/AuthContext';
+import ChatraceTagPicker, { useChatraceTags } from './ChatraceTagPicker';
 
 export default function AdminUserManagementModal({ isOpen, onClose, onUserUpdated, users = [], onRefreshUsers }) {
   const { user: currentUser } = useAuth();
@@ -18,6 +19,7 @@ export default function AdminUserManagementModal({ isOpen, onClose, onUserUpdate
   const [newRole, setNewRole] = useState('ASESOR');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const chatrace = useChatraceTags(isOpen);
 
   if (!isOpen) return null;
 
@@ -99,6 +101,13 @@ export default function AdminUserManagementModal({ isOpen, onClose, onUserUpdate
     } catch (err) {
       alert(err.response?.data?.error || 'Error al cambiar el tipo de usuario');
     }
+  };
+
+  // Etiqueta de Chatrace del asesor. Lanza si falla: el selector muestra el error junto al campo.
+  const handleSaveChatraceTag = async (user, name, create) => {
+    await api.put(`/admin/users/${user.id}/chatrace-tag`, { name, create });
+    onRefreshUsers();
+    if (create) chatrace.reload();
   };
 
   // Resetear Contraseña
@@ -284,6 +293,14 @@ export default function AdminUserManagementModal({ isOpen, onClose, onUserUpdate
 
         {/* LISTADO DE USUARIOS CON SWITCH Y ACCIONES */}
         <div className="flex-1 overflow-y-auto py-2 space-y-2">
+          {chatrace.configured === false && (
+            <p className="text-[10px] text-slate-400 px-1">
+              Para asignar una etiqueta de Chatrace a cada asesor, primero hay que activar la integración (Perfil → Integración Chatrace).
+            </p>
+          )}
+          {chatrace.error && (
+            <p role="alert" className="text-[10px] text-rose-500 px-1">{chatrace.error}</p>
+          )}
           {displayedUsers.map(u => (
             <div
               key={u.id}
@@ -318,6 +335,22 @@ export default function AdminUserManagementModal({ isOpen, onClose, onUserUpdate
                   {u.isActive ? 'Activo' : 'Deshabilitado'}
                 </span>
               </div>
+
+              {/* Etiqueta de Chatrace del asesor (solo si la integración está activada) */}
+              {chatrace.configured && (
+                <div className="mt-2.5 flex items-center gap-2">
+                  <span className="flex items-center gap-1 text-[10px] font-bold text-slate-500 shrink-0">
+                    <Tag className="w-3 h-3 text-[#6B8A0E]" /> Etiqueta Chatrace
+                  </span>
+                  <ChatraceTagPicker
+                    value={u.chatraceTag || ''}
+                    tags={chatrace.tags}
+                    onSave={(name, create) => handleSaveChatraceTag(u, name, create)}
+                    disabled={chatrace.settingsAvailable === false}
+                    className="flex-1"
+                  />
+                </div>
+              )}
 
               {/* Botonera de Gestión por Usuario */}
               <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-end gap-1.5">

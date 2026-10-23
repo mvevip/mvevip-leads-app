@@ -2,6 +2,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const { uploadToS3 } = require('./s3Service');
+const { syncReminderContact, toToolResult } = require('./chatraceSync');
 const { logError, logWarn, logInfo } = require('../utils/logger');
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -162,6 +163,7 @@ INSTRUCCIONES DE FORMATO Y ESTILO:
 - Cuando entregues listados de clientes o pendientes, UTILIZA TABLAS MARKDOWN claras (Columnas: | Cliente | Teléfono | Compromiso | Fecha / Hora | Estado |).
 - Si encontraste una imagen del cliente (mediaUrl), confírmalo y referencia la foto.
 - Confirma de manera clara y natural cualquier modificación o nota registrada.
+- Si al crear un compromiso el resultado trae un aviso de Chatrace (chatrace.message), menciónalo al final en UNA sola frase breve y natural (por ejemplo: «También dejé al cliente registrado en Chatrace»). Si indica que no se pudo sincronizar o que falta el teléfono, dilo con tranquilidad y aclara que el compromiso quedó creado igual. Si no hay aviso, no menciones Chatrace.
 `;
 
 // Declaración de Herramientas (Function Declarations) para Gemini
@@ -341,7 +343,7 @@ const toolsDeclarations = [
  * RESTRICCIÓN: Opera únicamente sobre mvevip_leads.
  * SEGURIDAD: Prohibición total de DELETE. Por defecto solo filtra registros del usuario actual.
  */
-async function executeTool(toolName, args, user, referenceDate) {
+async function executeTool(toolName, args, user, referenceDate, deadline) {
   try {
     const isUserAdmin = user.role === 'ADMIN';
 
@@ -601,10 +603,22 @@ async function executeTool(toolName, args, user, referenceDate) {
         }
       });
 
+      // Sincronización con Chatrace: opcional, a "mejor esfuerzo" y aislada. syncReminderContact NUNCA lanza:
+      // si Chatrace falla, el compromiso ya está creado y la respuesta queda igual que sin la integración.
+      const chatrace = toToolResult(await syncReminderContact({
+        reminderId: created.id,
+        userId: user.id,
+        clientName: created.clientName,
+        clientPhone: created.clientPhone,
+        assignedId: assignedUserId,
+        deadline
+      }));
+
       return {
         success: true,
         message: `Compromiso para ${created.clientName} creado exitosamente para el ${created.scheduledAt.toISOString()}.`,
-        reminderId: created.id
+        reminderId: created.id,
+        ...(chatrace ? { chatrace } : {})
       };
     }
 
@@ -727,7 +741,7 @@ const processAssistantTurn = async (user, history = [], newMessage = '', fileBuf
       const toolResponseParts = [];
 
       for (const call of functionCalls) {
-        const result = await executeTool(call.name, call.args, user, referenceDate);
+        const result = await executeTool(call.name, call.args, user, referenceDate, deadline);
         executedActions.push({ tool: call.name, args: call.args, result });
 
         // Si la herramienta retornó una imagen de lead, capturarla para la vista
@@ -827,5 +841,6 @@ const processAssistantTurn = async (user, history = [], newMessage = '', fileBuf
 };
 
 module.exports = {
-  processAssistantTurn
+  processAssistantTurn,
+  executeTool // Exportado para las pruebas automáticas
 };

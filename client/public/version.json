@@ -1,5 +1,5 @@
 {
-  "version": "1.0.8",
-  "buildTime": "2026-10-22T21:00:00Z",
-  "notes": "Control de volumen del tono con la app abierta, sonido de notificación más fuerte y audio preparado desde el primer toque"
+  "version": "1.0.9",
+  "buildTime": "2026-10-23T18:00:00Z",
+  "notes": "Integración con Chatrace: los clientes de los recordatorios se sincronizan y etiquetan, con etiqueta fija y etiqueta por asesor configurables"
 }

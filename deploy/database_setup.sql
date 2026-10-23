@@ -126,6 +126,15 @@ CREATE TABLE IF NOT EXISTS `rate_limit_events` (
   KEY `rate_limit_events_bucket_createdAt_idx` (`bucket`, `createdAt`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 9. Configuración clave/valor de la app (etiquetas de la integración con Chatrace; migración 002)
+CREATE TABLE IF NOT EXISTS `app_settings` (
+  `settingKey` VARCHAR(191) NOT NULL,
+  `settingValue` VARCHAR(500) NOT NULL,
+  `updatedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  `updatedBy` VARCHAR(191) NULL,
+  PRIMARY KEY (`settingKey`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- ==============================================================================
 -- INSERCIÓN DE DATOS BASE OBLIGATORIOS (SIN DATOS DE PRUEBA)
 -- ==============================================================================

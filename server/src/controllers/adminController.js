@@ -5,7 +5,9 @@ const { sendBroadcastPush, sendPushToUser } = require('../services/webPushServic
 const { normalizeMediaUrl } = require('../services/s3Service');
 const { validatePassword, generateTempPassword } = require('../utils/passwords');
 const { bumpTokenVersion } = require('../utils/sessionVersion');
-const { logInfo, logError } = require('../utils/logger');
+const { logInfo, logWarn, logError } = require('../utils/logger');
+const chatraceService = require('../services/chatraceService');
+const chatraceSettings = require('../services/chatraceSettings');
 
 const VALID_ROLES = ['ADMIN', 'ASESOR'];
 const ROLE_LABELS = { ADMIN: 'Administrador', ASESOR: 'Asesor Comercial' };
@@ -42,7 +44,15 @@ const getUsers = async (req, res) => {
       },
       orderBy: { createdAt: 'desc' }
     });
-    return res.json(users);
+
+    // Etiqueta de Chatrace de cada usuario. Si la tabla de configuración aún no existe, la lista sale igual, sin etiquetas.
+    let advisorTags = {};
+    try {
+      advisorTags = await chatraceSettings.getAdvisorTags(users.map((u) => u.id));
+    } catch (err) {
+      logWarn('chatrace_config', { kind: 'settings_unavailable', errorName: err?.name, code: err?.code });
+    }
+    return res.json(users.map((u) => ({ ...u, chatraceTag: advisorTags[u.id] || null })));
   } catch (error) {
     console.error('Error listando usuarios:', error);
     return res.status(500).json({ error: 'Error al listar usuarios' });
@@ -330,6 +340,107 @@ const getAdminStats = async (req, res) => {
   }
 };
 
+// --- Integración con Chatrace (solo administradores) --------------------------------------------------------------
+const CHATRACE_ADMIN_TIMEOUT_MS = 8000; // Tiempo máximo para consultas de configuración desde la app
+const MAX_TAG_NAME_CHARS = 100;
+
+const chatraceUnavailable = (res, err, stage) => {
+  const kind = err?.kind || 'error';
+  logWarn(stage, { kind, status: err?.status });
+  const message = kind === 'disabled'
+    ? 'La integración con Chatrace no está activada (falta configurar el token en el servidor).'
+    : 'No se pudo consultar Chatrace en este momento. Intenta de nuevo.';
+  return res.status(kind === 'disabled' ? 503 : 502).json({ error: message, kind });
+};
+
+/**
+ * Valida el nombre de etiqueta recibido y se asegura de que exista en Chatrace.
+ * Si no existe, solo se crea cuando el administrador lo pide expresamente (create: true).
+ * Devuelve { name } o { error, status } listo para responder. Nombre vacío = quitar la etiqueta.
+ */
+const resolveChatraceTag = async (rawName, create) => {
+  const name = String(rawName ?? '').trim();
+  if (!name) return { name: '' };
+  if (name.length > MAX_TAG_NAME_CHARS) {
+    return { status: 400, error: `El nombre de la etiqueta no puede superar ${MAX_TAG_NAME_CHARS} caracteres` };
+  }
+  const deadline = Date.now() + CHATRACE_ADMIN_TIMEOUT_MS;
+  const existingId = await chatraceService.getTagId(name, { deadline });
+  if (existingId) return { name };
+  if (create !== true) {
+    return { status: 404, error: 'Esa etiqueta no existe en Chatrace. Elige una existente o créala desde la app.' };
+  }
+  await chatraceService.createTag(name, { deadline });
+  return { name, created: true };
+};
+
+/**
+ * Estado de la integración: ¿hay token configurado? y etiqueta fija actual
+ */
+const getChatraceStatus = async (req, res) => {
+  let fixedTag = null;
+  let settingsAvailable = true;
+  try {
+    fixedTag = await chatraceSettings.getFixedTag();
+  } catch (err) {
+    settingsAvailable = false;
+    logWarn('chatrace_config', { kind: 'settings_unavailable', errorName: err?.name, code: err?.code });
+  }
+  return res.json({ configured: chatraceService.isEnabled(), settingsAvailable, fixedTag });
+};
+
+/**
+ * Lista las etiquetas existentes en Chatrace (para los selectores de la app)
+ */
+const getChatraceTags = async (req, res) => {
+  try {
+    const tags = await chatraceService.listTags({ deadline: Date.now() + CHATRACE_ADMIN_TIMEOUT_MS });
+    return res.json({ tags });
+  } catch (err) {
+    return chatraceUnavailable(res, err, 'chatrace_admin_tags');
+  }
+};
+
+/**
+ * Elegir (o crear) la etiqueta fija que se aplica a todos los contactos sincronizados
+ */
+const setChatraceFixedTag = async (req, res) => {
+  try {
+    const resolved = await resolveChatraceTag(req.body?.name, req.body?.create);
+    if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
+
+    await chatraceSettings.setFixedTag(resolved.name, req.user.id);
+    logInfo('chatrace_config', { action: 'fixed_tag_set', actorId: req.user.id, cleared: !resolved.name, tagCreated: Boolean(resolved.created) });
+    return res.json({ fixedTag: resolved.name || null, created: Boolean(resolved.created) });
+  } catch (err) {
+    if (err?.name === 'ChatraceError') return chatraceUnavailable(res, err, 'chatrace_admin_fixed_tag');
+    logError('chatrace_admin_fixed_tag', err, { actorId: req.user?.id });
+    return res.status(500).json({ error: 'No se pudo guardar la etiqueta fija' });
+  }
+};
+
+/**
+ * Elegir (o crear) la etiqueta de Chatrace de un asesor
+ */
+const setUserChatraceTag = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const target = await prisma.user.findUnique({ where: { id }, select: { id: true, name: true } });
+    if (!target) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    const resolved = await resolveChatraceTag(req.body?.name, req.body?.create);
+    if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
+
+    await chatraceSettings.setAdvisorTag(id, resolved.name, req.user.id);
+    logInfo('chatrace_config', { action: 'advisor_tag_set', actorId: req.user.id, targetId: id, cleared: !resolved.name, tagCreated: Boolean(resolved.created) });
+    return res.json({ userId: id, chatraceTag: resolved.name || null, created: Boolean(resolved.created) });
+  } catch (err) {
+    if (err?.name === 'ChatraceError') return chatraceUnavailable(res, err, 'chatrace_admin_advisor_tag');
+    logError('chatrace_admin_advisor_tag', err, { actorId: req.user?.id, targetId: req.params?.id });
+    return res.status(500).json({ error: 'No se pudo guardar la etiqueta del asesor' });
+  }
+};
+
 module.exports = {
   getUsers,
   createUser,
@@ -337,5 +448,9 @@ module.exports = {
   toggleUserStatus,
   resetUserPassword,
   sendCustomNotification,
-  getAdminStats
+  getAdminStats,
+  getChatraceStatus,
+  getChatraceTags,
+  setChatraceFixedTag,
+  setUserChatraceTag
 };

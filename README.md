@@ -25,6 +25,10 @@ Aplicación Web Progresiva (PWA) para la fuerza comercial de MVEVIP. Integra la 
   - Compatible con iOS 16.4+ (PWA instalada) y Android (Chrome).
   - Recordatorios desatendidos: EventBridge ejecuta el cron cada minuto, con reintentos y sin envíos duplicados.
   - Sonido y vibración configurables.
+- 🔗 **Integración con Chatrace (opcional)**:
+  - Al crear un recordatorio desde el chat, el cliente se busca por su teléfono en Chatrace: si existe se le agregan las etiquetas y si no, se crea con sus datos y las etiquetas.
+  - Etiqueta fija y etiqueta por asesor, configurables en la app (elegir una existente o crear una nueva).
+  - Se activa solo al cargar `CHATRACE_API_TOKEN`; si Chatrace falla, el recordatorio se crea igual y el error queda en los logs.
 - 🔒 **Privacidad y seguridad**:
   - Fotos de clientes y avatares privados, con URLs firmadas de corta vida.
   - Límite de intentos de login, sesiones revocables, verificación de origen desde CloudFront y límites de tráfico en el API Gateway.
@@ -109,6 +113,13 @@ Los cambios de esquema de la base de datos son scripts SQL numerados en [`deploy
 | `MEDIA_SIGNER_ACCESS_KEY_ID`, `MEDIA_SIGNER_SECRET_ACCESS_KEY` | Claves del usuario IAM de solo lectura que firma las URLs de imágenes |
 | `ORIGIN_VERIFY_SECRET`, `ORIGIN_VERIFY_MODE`, `ORIGIN_VERIFY_SECRET_PREVIOUS` | Verificación de origen desde CloudFront (`off` / `log` / `enforce`) |
 | `CORS_ORIGINS`, `CRON_SECRET` | Opcionales: orígenes permitidos y habilitación de la ruta HTTP del cron |
+| `CHATRACE_API_TOKEN` | Opcional y secreto. Activa la integración con Chatrace (en producción se carga con `deploy/set-lambda-env.ps1`, nunca en el repositorio). `CHATRACE_BASE_URL`, `CHATRACE_DEFAULT_COUNTRY` y `CHATRACE_TIMEOUT_MS` son opcionales |
+
+### Pruebas automáticas
+
+```bash
+cd server && npm test      # node --test: integración con Chatrace (servidor simulado, sin llamar a servicios reales)
+```
 
 ---
 
