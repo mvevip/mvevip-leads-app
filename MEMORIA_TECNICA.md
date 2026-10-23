@@ -1,14 +1,48 @@
 # MEMORIA TÉCNICA - MVEVIP LEAD REMINDER & ASISTENTE IA
 
 **Proyecto:** MVEVIP Leads & Recordatorios (PWA)  
-**Versión del frontend:** 1.0.7 (el backend no tiene número de versión; ver el historial de commits)  
+**Versión del frontend:** 1.0.8 (el backend no tiene número de versión; ver el historial de commits)  
 **Dominio de producción:** [https://leads.mvevip.com](https://leads.mvevip.com)  
 **Repositorios:**  
 - Personal (respaldo y actividad): [https://github.com/caloloc2/mvevip_leads_agente](https://github.com/caloloc2/mvevip_leads_agente)  
 - Empresa (colaborador principal): [https://github.com/mvevip/mvevip-leads-app](https://github.com/mvevip/mvevip-leads-app)  
-**Última actualización:** 21 de octubre de 2026
+  *El trabajo de las sesiones del 21 al 23-oct-2026 se hizo y se subió solo a este repositorio; el personal no se actualizó desde esas sesiones (sincronizarlo a mano si se usa de respaldo).*  
+**Última actualización:** 23 de octubre de 2026
 
 > Este documento describe el sistema **tal como está desplegado hoy**. El historial de cambios y los pendientes están al final (secciones 10 y 11). Los procedimientos de operación (logs, desbloqueos, rotación de secretos, reversiones) están en la sección 7.
+
+---
+
+## 0. Dónde estamos y cómo retomar (al 23-oct-2026)
+
+**Estado actual**
+- **Producción:** frontend **1.0.8** y backend con todo lo de la sesión de endurecimiento del 21-oct, Lambda en **Node 24**. `main` (commit `a2743fb`) refleja exactamente lo desplegado. No hay trabajo a medias ni ramas con cambios sin integrar.
+- **Despliegue:** por GitHub Actions desde `main` (sección 8.5). Último despliegue: frontend 1.0.8 (run 6, 22-oct-2026). Backend desplegado con el flujo nuevo en el run 5.
+- **Sonido de notificaciones:** se decidió **dejarlo como está** (ver 4.4). No hay cambios pendientes ahí.
+
+**Cómo se trabaja (flujo acordado)**
+1. Se piden los cambios y se desarrollan en la rama de trabajo (`claude/awesome-goodall-olw275`, que se reinicia desde `main` en cada tanda).
+2. Se prueban y se abre un PR a `main`; el **CI** debe quedar en verde.
+3. Con la orden explícita «mergea y despliega» se mergea el PR y se lanza `Deploy` desde `main` (`target` = `frontend`, `backend` o ambos). Se verifica por fuera: `version.json`, `/health`, un login inválido por `leads.mvevip.com` (debe dar 401) y el respaldo en S3.
+4. Para volver atrás: workflow `Rollback` (8.3).
+
+**Reglas de trabajo**
+- Todo cambio en IAM o en AWS que no sea el despliegue se confirma antes con el responsable. Mergear y desplegar requieren una orden explícita en cada ocasión.
+- **Antes de reiniciar la rama de trabajo desde `main`, comprobar `git log origin/main..HEAD`:** si hay commits sin mergear, un push con `--force-with-lease` los borra de la rama remota (el 22-oct pasó con la actualización de la memoria técnica y hubo que recuperarla del repositorio local).
+- El workflow `Deploy` no tiene aprobación manual: no se lanza sin orden.
+
+**Comprobación rápida del estado**
+```bash
+curl -s https://leads.mvevip.com/version.json     # debe decir 1.0.8
+curl -s https://leads.mvevip.com/health           # {"status":"ok",...}
+```
+
+**Próximos pasos sugeridos** (el detalle está en la sección 11.1)
+1. Probar `Rollback` una vez con el respaldo más reciente (hoy sin probar).
+2. Subir las acciones de GitHub que usan Node 20 y alinear los Dockerfiles locales a Node 24.
+3. Iconos PNG de la PWA y de las notificaciones (hoy no existen).
+4. Seguridad pendiente: RDS accesible públicamente, rol compartido con `AmazonS3FullAccess` y el hash del administrador en `database_setup.sql`.
+5. Ideas aplazadas: selector de tonos para el chime de la app, alertas por WhatsApp.
 
 ---
 
@@ -180,10 +214,28 @@ mvevip_lead_app/
 - **Cambio de tipo de usuario:** el panel de usuarios permite pasar un usuario de ADMIN a ASESOR y viceversa. Reglas: no se puede cambiar el propio tipo; no se puede degradar al último administrador activo; el cambio cierra las sesiones del usuario (`tokenVersion`) y le envía un aviso push; queda el log `role_changed` (actor, objetivo, de, a, sesiones cerradas). Los permisos los decide siempre el servidor según el rol en la base de datos.
 - **Agenda multi-asesor:** los administradores filtran por uno, varios o todos los asesores; cada tarjeta muestra el asesor responsable.
 - **Chat:** texto, notas de voz, fotos por selección, arrastrar y soltar, y pegado desde el portapapeles (`Ctrl + V`).
-- **Notificaciones:** Web Push (VAPID) con sonido y vibración; compatible con iOS 16.4+ (PWA instalada) y Chrome en Android.
+- **Notificaciones:** Web Push (VAPID) con sonido y vibración; compatible con iOS 16.4+ (PWA instalada) y Chrome en Android. Con la app abierta suena además un chime propio con volumen configurable en Perfil (ver 4.4).
 - **Visual móvil:** `theme-color` dinámico (claro/oscuro) y áreas seguras para notch.
 - **Actualizaciones:** `UpdateContext` consulta `/version.json` y avisa de versiones nuevas.
 - **Service Worker:** solo gestiona Web Push, el aviso de actualización y la limpieza de cachés antiguas. **No tiene manejador `fetch`: la app no funciona sin conexión.**
+
+### 4.4. Notificaciones y sonido
+
+| Situación | Quién pone el sonido | ¿Se puede cambiar? |
+|---|---|---|
+| **App abierta** (chime de la app) | La app (`client/src/services/soundService.js`) | Sí: tono, duración y volumen |
+| **App cerrada o en segundo plano** (notificación push) | El sistema operativo del dispositivo | **No desde la app** |
+
+**Con la app cerrada** el estándar de notificaciones web no permite elegir el tono ni el volumen (la opción `sound` de la propuesta original nunca se implementó en los navegadores). Lo decide el dispositivo: en **Android** cada sitio tiene su propia categoría de notificación y ahí se elige el tono; en **iPhone** una web app usa el sonido por defecto y no se puede cambiar; en **computador**, el sonido de notificaciones del sistema. La vibración (`[200,100,200,100,200]` en `sw.js`) solo la respeta Android; iOS la ignora en notificaciones web. Guía para los dispositivos: 7.8.
+
+**Con la app abierta (1.0.8, 22-oct-2026):**
+- `scheduleChime()` genera tres notas (D5, A5, D6) con un limitador y después el volumen del usuario (0 a 100 %, **100 % por defecto**), de modo que el control es proporcional en todo el rango.
+- El volumen se guarda por dispositivo en `localStorage` (`mvevip_sound_volume`; el interruptor, en `mvevip_sound_enabled`). El control está en **Perfil**, bajo el interruptor de sonido, y se oculta si el sonido está apagado; al soltarlo suena una muestra.
+- El tono de una push llega por un mensaje del Service Worker (`PUSH_NOTIFICATION_RECEIVED`) que escucha `HomePage.jsx`. Como no nace de un toque del usuario, el audio se prepara en el **primer gesto** (los navegadores móviles, sobre todo iOS, lo exigen).
+- Medición (renderizado offline en Chromium, dB respecto al máximo digital): antes pico -9,9 / promedio -28,7; ahora al 100 % pico -1,5 / promedio -15,5 (≈ 13 dB más fuerte); al 25 % ≈ el volumen anterior. **No se ha probado en un teléfono real** (ni en iOS).
+- Con la app abierta suenan dos cosas a la vez: el chime de la app y el sonido de la notificación del sistema. Es el comportamiento esperado.
+
+**Decisión (23-oct-2026):** se mantiene esta configuración sin cambios. Opciones evaluadas y aplazadas: (1) selector de 3 o 4 tonos para el chime de la app, un cambio pequeño; (2) cada asesor elige su tono en Android; (3) app nativa con Capacitor para tener sonido propio también con la app cerrada y en iPhone (descartada por ahora: cuentas de desarrollador, revisión de las tiendas, FCM/APNs en lugar de Web Push y dos apps que mantener); (4) alertas por WhatsApp (ya en el roadmap), con el sonido que cada persona tenga en WhatsApp.
 
 ---
 
@@ -301,6 +353,16 @@ aws cloudfront create-invalidation --distribution-id E2FMW6HOSKOVMP --paths "/up
 ```
 CloudFront guarda en caché 24 h por defecto; tras cambiar permisos de `uploads/`, invalidar.
 
+### 7.8. Guía para dispositivos: sonido de las notificaciones con la app cerrada
+Los nombres de los menús varían según la marca y la versión del sistema. Desde las sesiones de Claude no se verificaron en dispositivos reales.
+
+- **Android (Chrome):** mantener pulsado el icono de la app → Información de la app → Notificaciones → categoría del sitio `leads.mvevip.com` → importancia **Alta** o **Urgente** (emite sonido y aparece en pantalla) y, si se quiere, elegir el **Sonido**. Subir el volumen de notificaciones, desactivar No molestar y, en Batería, poner Chrome o la app **Sin restricciones** para que las notificaciones lleguen con la pantalla apagada.
+- **iPhone (iOS 16.4 o superior, app agregada a la pantalla de inicio):** Ajustes → Notificaciones → la app → activar Permitir notificaciones y **Sonidos**; subir el volumen en Ajustes → Sonidos y vibración → Tono y alertas; comprobar que el **interruptor lateral de silencio** no esté en silencio y que Concentración / No molestar no bloquee la app.
+- **Windows (Chrome o Edge):** Configuración → Sistema → Notificaciones → Chrome o Edge → activado y «Reproducir un sonido cuando llegue una notificación»; desactivar el Asistente de concentración. En el navegador, `chrome://settings/content/notifications` con `leads.mvevip.com` en Permitido.
+- **macOS:** Ajustes del Sistema → Notificaciones → Google Chrome → estilo Alertas y «Reproducir sonido para notificaciones».
+- **Probar:** en Perfil pulsar «Probar Push» y de inmediato bloquear el teléfono o cambiar de app.
+- **Actualizar la app a la última versión:** Perfil → Versión de la App → «Buscar / Probar».
+
 ---
 
 ## 8. Despliegue
@@ -354,7 +416,7 @@ Archivos: `.github/workflows/ci.yml`, `deploy.yml` y `rollback.yml`; scripts en 
 - **AWS:** proveedor OIDC y rol `mvevip-leads-github-deploy` (`deploy/iam/github-deploy-trust.json` y `github-deploy-policy.json`, política inline `GithubDeploy`). El rol solo puede: actualizar el código de `mvevip-lead-api`, leer/escribir el bucket `mvevip-leads` **excepto `uploads/*`**, invalidar `E2FMW6HOSKOVMP` y leer los logs de la Lambda. No puede cambiar la configuración de la Lambda, tocar IAM/RDS ni otras funciones (probado con el simulador de IAM).
 - **GitHub:** environment `production` sin revisores (los despliegues corren sin pausa; recomendado: restringir *Deployment branches* a `main`, no verificado desde aquí); variables `AWS_DEPLOY_ROLE_ARN` y `VITE_VAPID_PUBLIC_KEY` (clave pública VAPID; `build` y `deploy` declaran el environment para poder leerlas).
 
-**Estado de las pruebas (22-oct-2026):** `Deploy` con `target=frontend` (run 3) y con `target=backend` (run 5) pasaron completos y se comprobaron por fuera (`version.json`, `/health`, login por CloudFront, respaldo en S3). `Rollback` aún no se ha ejecutado.
+**Estado de las pruebas (22-oct-2026):** `Deploy` con `target=frontend` (run 3), con `target=backend` (run 5) y con `target=frontend` otra vez para la 1.0.8 (run 6) pasaron completos y se comprobaron por fuera (`version.json`, `/health`, login por CloudFront, respaldo en S3, contenido del bundle). Hubo dos intentos previos fallidos que no tocaron producción (runs 1, 2 y 4: variables del environment, formato del `sub` y permiso de etiquetas). **`Rollback` aún no se ha ejecutado de verdad.**
 
 **Lecciones aprendidas (errores que ya se corrigieron):**
 1. **Variables del environment:** una variable definida en el environment solo la ven los jobs que declaran `environment: production`; `build` la recibía vacía (PR 2).
@@ -398,20 +460,22 @@ El repositorio **no tiene pruebas automatizadas**. Durante la sesión del 21-oct
 | `61473c3` | Reintento sin historial ante bloqueos del filtro de Gemini; logs de diagnóstico del asistente y de push por dispositivo |
 | `07ece8e` | Frontend 1.0.7: calendario de lunes a domingo (5 AM a 12 AM); endpoint `PATCH /api/admin/users/:id/role` y botón de cambio de tipo de usuario; `client/package-lock.json` |
 
-### Sesión del 22-oct-2026 (despliegue con GitHub Actions)
-| Cambio | Detalle |
-|---|---|
-| PR 1 | `main` pasa a reflejar producción (1.0.7) y se agregan los workflows `ci`, `deploy` y `rollback`, `deploy/ci/` y `deploy/iam/` |
-| PR 2 | `build` declara `environment: production` para leer `VITE_VAPID_PUBLIC_KEY` |
-| PR 3 | Respaldos con `--copy-props none`; confianza del rol con el `sub` de IDs inmutables |
-| AWS | Proveedor OIDC de GitHub y rol `mvevip-leads-github-deploy` |
-| Despliegues | Frontend (run 3) y backend (run 5) desplegados con el flujo nuevo, sin cambios de código respecto a lo ya publicado |
-
 **Runtime:** la Lambda pasó de `nodejs20.x` a `nodejs24.x` (cambio solo de configuración, sin redeploy de código).
 
 **Despliegue de la 1.0.7 (21-oct-2026, 22:35 UTC):** backend por parche del zip (solo `adminController.js` y `api.js`; respaldo en `deployments/backup/lambda-backend-2026-10-21-pre-roles.zip`) y frontend compilado con Node 24 (idéntico byte a byte al compilado con Node 20) y subido a S3 con `no-cache` en `index.html`, `sw.js` y `version.json`; respaldo de los archivos anteriores en `deployments/backup/frontend-2026-10-21/`. El bundle se compila con `VITE_VAPID_PUBLIC_KEY` (la clave pública de la Lambda): el repo no la incluye (`client/.env.production` solo tiene `VITE_API_URL`), así que cualquier compilación fuera del contenedor debe definirla. Verificado: hash de la Lambda, `/health`, 0 errores, cron activo, `version.json` 1.0.7 y login sin errores de consola. Esos cambios se integraron a `main` el 22-oct-2026 (PR 1, commit `8ddb480`).
 
 **Cambios en AWS y en la base de datos:** log group con retención de 30 días y permiso de logs en el rol; usuario IAM `mvevip-leads-media-signer`; variables de entorno nuevas; política del bucket con `Deny` a `uploads/*`; invalidación de `/uploads/*`; header `X-Origin-Verify` en `ApiGatewayOrigin`; 3 rutas con límites en el API Gateway; concurrencia reservada de 25; migración SQL 001.
+
+### Sesión del 22-oct-2026 (despliegue con GitHub Actions y sonido)
+| Cambio | Detalle |
+|---|---|
+| PR 1 | `main` pasa a reflejar producción (1.0.7) y se agregan los workflows `ci`, `deploy` y `rollback`, `deploy/ci/` y `deploy/iam/` |
+| PR 2 | `build` declara `environment: production` para leer `VITE_VAPID_PUBLIC_KEY` |
+| PR 3 | Respaldos con `--copy-props none`; confianza del rol con el `sub` de IDs inmutables |
+| PR 4 | Frontend **1.0.8**: volumen configurable y chime más fuerte con la app abierta; memoria técnica |
+| AWS | Proveedor OIDC de GitHub y rol `mvevip-leads-github-deploy` |
+| Despliegues | Frontend 1.0.7 (run 3), backend (run 5) y frontend 1.0.8 (run 6) con el flujo nuevo. Los dos primeros sin cambios de código respecto a lo ya publicado |
+| Decisión | Dejar el sonido como está (4.4); sin selector de tonos por ahora |
 
 ---
 
@@ -433,6 +497,8 @@ El repositorio **no tiene pruebas automatizadas**. Durante la sesión del 21-oct
 | 10 | **Pruebas automatizadas** | El repositorio no tiene pruebas; las de esta sesión viven fuera del repo. Incorporarlas: el CI de GitHub Actions (8.5) ya existe y es el lugar donde ejecutarlas |
 | 11 | **Código muerto** | `GeminiBotModal.jsx` y `ProjectCard.jsx` no se importan en ningún lugar; el valor `TRANSFERRED` del enum y las tablas de etiquetas no tienen uso; `/api/bot/conversation` duplica a `/api/bot/turn`; `vite-plugin-pwa` está instalado pero no se usa |
 | 12 | **Audio, WhatsApp, métricas en el chat, geolocalización** | Funcionalidades futuras (prioridad media a baja) |
+| 13 | **Selector de tonos para el chime de la app** | Opcional y aplazado el 23-oct-2026: 3 o 4 tonos elegibles en Perfil además del volumen. Solo aplica con la app abierta (ver 4.4) |
+| 14 | **Verificar la restricción de ramas del environment `production`** | Recomendado: *Deployment branches* = `main`. No se pudo comprobar desde las sesiones de Claude |
 
 ### 11.2. Dependencias (`npm audit`, 21-oct-2026)
 - **`multer` 1.4.5-lts.2** (carga de archivos del asistente): el registro de npm lo marca como obsoleto por vulnerabilidades corregidas en la 2.x. Pendiente de actualizar a 2.x y probar la subida de imágenes y notas de voz.
@@ -448,6 +514,7 @@ El repositorio **no tiene pruebas automatizadas**. Durante la sesión del 21-oct
 - **Cambio aplicado en producción el 21-oct-2026 (21:55 UTC)** con `aws lambda update-function-configuration --runtime nodejs24.x` (solo cambia el runtime: las variables de entorno y el código no se tocan). Verificado después del cambio: arranque con `nodejs:24.mainline`, `Init Duration` de ~725 ms (antes 580 a 710 ms), login inválido por CloudFront (Prisma y RDS operativos), cron cada minuto, acceso directo al API Gateway rechazado, sin la advertencia del SDK de AWS y sin errores ni throttles. **Reversión:** `aws lambda update-function-configuration --function-name mvevip-lead-api --runtime nodejs20.x` (AWS permite volver a Node 20 hasta el 31-ago-2027).
 
 ### 11.4. Limitaciones conocidas
+- El sonido de las notificaciones con la app cerrada lo decide el dispositivo y no se puede cambiar desde la app; el iPhone no vibra con las notificaciones web (4.4).
 - La app no funciona sin conexión (el Service Worker no guarda en caché).
 - Las URLs de imágenes duran 24 a 25 horas: una pestaña abierta más de un día requiere recargar.
 - Los límites del API Gateway son de mejor esfuerzo; la barrera dura es la concurrencia reservada (25).

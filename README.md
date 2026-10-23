@@ -78,14 +78,16 @@ docker compose up -d --build
 
 ## ☁️ Despliegue en AWS
 
-Requiere AWS CLI con el perfil `marketingvip` y permisos sobre S3 (`mvevip-leads`), CloudFront (`E2FMW6HOSKOVMP`) y Lambda (`mvevip-lead-api`).
+**Procedimiento oficial: GitHub Actions** (desde el 22-oct-2026). Los cambios se integran a `main` por PR con el CI en verde y se lanza el workflow **Deploy** desde `main` (pestaña Actions → Deploy → Run workflow), eligiendo `backend`, `frontend` o `backend+frontend`. El workflow usa credenciales temporales de AWS (OIDC, sin claves guardadas), respalda lo que hay en producción antes de tocar nada y verifica el resultado (hash de la Lambda, `/health`, logs y versión publicada). Para volver atrás: workflow **Rollback**. Detalle, permisos del rol y lecciones aprendidas en la sección 8.5 de [`MEMORIA_TECNICA.md`](./MEMORIA_TECNICA.md).
+
+**Alternativa manual** (requiere AWS CLI con el perfil `marketingvip` y permisos sobre S3 `mvevip-leads`, CloudFront `E2FMW6HOSKOVMP` y Lambda `mvevip-lead-api`; no hace respaldo ni verificación automáticos):
 
 ```powershell
 .\deploy\deploy-aws.ps1 -DeployBackend   # Backend (Lambda) + frontend (S3) + invalidación de CloudFront
 .\deploy\deploy-aws.ps1                  # Solo frontend
 ```
 
-`package-lambda.ps1` instala las dependencias en el contenedor, genera el cliente de Prisma, empaqueta y **verifica el contenido del zip** (descarta el paquete si falta alguna dependencia). Antes de desplegar el backend, haz una copia del zip actual en `s3://mvevip-leads/deployments/backup/`. Más detalle, reversión y procedimientos de operación en la sección 7 y 8 de [`MEMORIA_TECNICA.md`](./MEMORIA_TECNICA.md).
+`package-lambda.ps1` instala las dependencias en el contenedor, genera el cliente de Prisma, empaqueta y **verifica el contenido del zip** (descarta el paquete si falta alguna dependencia). Antes de desplegar el backend a mano, haz una copia del zip actual en `s3://mvevip-leads/deployments/backup/`. Más detalle y procedimientos de operación en las secciones 7 y 8 de la memoria técnica.
 
 Los cambios de esquema de la base de datos son scripts SQL numerados en [`deploy/migrations/`](./deploy/migrations/), que se ejecutan a mano **antes** de desplegar el código que los usa.
 
@@ -116,6 +118,7 @@ Los cambios de esquema de la base de datos son scripts SQL numerados en [`deploy
 mvevip_lead_app/
 ├── client/            # Frontend (React + Vite PWA)
 ├── server/            # Backend (Express + handler de Lambda)
+├── .github/workflows/ # CI, despliegue (Deploy) y reversión (Rollback) con GitHub Actions
 ├── deploy/            # Scripts de despliegue, políticas AWS, esquema SQL y migraciones
 ├── .env.example       # Plantilla de variables de entorno (sin secretos)
 ├── docker-compose.yml # Servicios locales
