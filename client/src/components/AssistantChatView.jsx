@@ -3,8 +3,31 @@ import api from '../services/api';
 import { 
   Send, Mic, Image as ImageIcon, Sparkles, Loader2, RefreshCw, 
   Trash2, StopCircle, X, Maximize2, CheckCircle2, Clock, Calendar, 
-  User, Phone, ChevronRight, AlertCircle 
+  User, Phone, ChevronRight, AlertCircle, Link2 
 } from 'lucide-react';
+
+/**
+ * Aviso del estado de la sincronización con Chatrace al crear un lead (act.result.chatrace).
+ * Devuelve null si la integración no está activada: en ese caso el chat se ve exactamente igual que antes.
+ */
+const chatraceChip = (chatrace) => {
+  if (!chatrace?.status) return null;
+  const tones = {
+    ok: 'bg-sky-500/15 text-sky-700 dark:text-sky-300',
+    warn: 'bg-amber-500/15 text-amber-700 dark:text-amber-300',
+    info: 'bg-slate-500/15 text-slate-600 dark:text-neutral-300'
+  };
+  if (chatrace.status === 'synced') {
+    return { tone: tones.ok, label: chatrace.created ? 'Contacto nuevo en Chatrace' : 'Etiquetado en Chatrace' };
+  }
+  if (chatrace.status === 'partial') return { tone: tones.warn, label: 'Chatrace: falta una etiqueta' };
+  if (chatrace.status === 'skipped') {
+    if (chatrace.reason === 'no_phone') return { tone: tones.info, label: 'Sin teléfono: no se sincronizó' };
+    if (chatrace.reason === 'invalid_phone') return { tone: tones.info, label: 'Teléfono no válido: no se sincronizó' };
+    return { tone: tones.info, label: 'No se sincronizó con Chatrace' };
+  }
+  return { tone: tones.warn, label: 'No se pudo sincronizar con Chatrace' };
+};
 
 /**
  * Renderizador de Markdown simple y seguro para el chat:
@@ -511,17 +534,30 @@ export default function AssistantChatView({ user, onReminderUpdated }) {
                   {/* Acciones realizadas en base de datos si las hubo */}
                   {msg.actions && msg.actions.length > 0 && (
                     <div className="mt-2.5 pt-2 border-t border-slate-100 dark:border-neutral-700/60 flex flex-wrap gap-1.5">
-                      {msg.actions.map((act, aIdx) => (
-                        <span
-                          key={aIdx}
-                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#9AC31C]/15 text-[#6B8A0E] dark:text-[#9AC31C] text-[10px] font-bold"
-                        >
-                          <CheckCircle2 className="w-3 h-3" />
-                          {act.tool === 'update_reminder' ? 'Compromiso actualizado' :
-                           act.tool === 'add_followup_note' ? 'Nota registrada' :
-                           act.tool === 'create_reminder' ? 'Nuevo lead creado' : 'Actualizado'}
-                        </span>
-                      ))}
+                      {msg.actions.map((act, aIdx) => {
+                        const chip = act.tool === 'create_reminder' ? chatraceChip(act.result?.chatrace) : null;
+                        return (
+                          <React.Fragment key={aIdx}>
+                            <span
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#9AC31C]/15 text-[#6B8A0E] dark:text-[#9AC31C] text-[10px] font-bold"
+                            >
+                              <CheckCircle2 className="w-3 h-3" />
+                              {act.tool === 'update_reminder' ? 'Compromiso actualizado' :
+                               act.tool === 'add_followup_note' ? 'Nota registrada' :
+                               act.tool === 'create_reminder' ? 'Nuevo lead creado' : 'Actualizado'}
+                            </span>
+                            {chip && (
+                              <span
+                                title={act.result?.chatrace?.message}
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${chip.tone}`}
+                              >
+                                <Link2 className="w-3 h-3" />
+                                {chip.label}
+                              </span>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
                     </div>
                   )}
                 </div>

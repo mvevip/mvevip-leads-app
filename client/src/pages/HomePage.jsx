@@ -8,6 +8,7 @@ import AssistantChatView from '../components/AssistantChatView';
 import CalendarAgendaView from '../components/CalendarAgendaView';
 import ReminderDetailModal from '../components/ReminderDetailModal';
 import AdminUserManagementModal from '../components/AdminUserManagementModal';
+import ChatraceIntegrationPanel from '../components/ChatraceIntegrationPanel';
 import UserAvatar from '../components/UserAvatar';
 import { registerPushNotifications, triggerTestPush } from '../services/pushService';
 import soundService from '../services/soundService';
@@ -498,6 +499,8 @@ export default function HomePage() {
                   <span className="font-bold text-[#9AC31C]">&gt;</span>
                 </button>
               )}
+
+              {isAdmin && <ChatraceIntegrationPanel />}
 
               <button
                 onClick={logout}
