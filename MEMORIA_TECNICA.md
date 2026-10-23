@@ -19,6 +19,7 @@
 - **Producción:** frontend **1.0.8** y backend con todo lo de la sesión de endurecimiento del 21-oct, Lambda en **Node 24**. `main` (commit `a2743fb`) refleja exactamente lo desplegado. No hay trabajo a medias ni ramas con cambios sin integrar.
 - **Despliegue:** por GitHub Actions desde `main` (sección 8.5). Último despliegue: frontend 1.0.8 (run 6, 22-oct-2026). Backend desplegado con el flujo nuevo en el run 5.
 - **Sonido de notificaciones:** se decidió **dejarlo como está** (ver 4.4). No hay cambios pendientes ahí.
+- **En curso (23-oct-2026): integración con Chatrace, etapa 1** (ver 4.5). Desarrollada y probada, en un PR; **todavía sin desplegar** (frontend 1.0.9). Para ponerla en marcha hay pasos manuales tuyos (SQL y token): **7.9**. Hasta entonces la app en producción se comporta como siempre.
 
 **Cómo se trabaja (flujo acordado)**
 1. Se piden los cambios y se desarrollan en la rama de trabajo (`claude/awesome-goodall-olw275`, que se reinicia desde `main` en cada tanda).
@@ -30,6 +31,7 @@
 - Todo cambio en IAM o en AWS que no sea el despliegue se confirma antes con el responsable. Mergear y desplegar requieren una orden explícita en cada ocasión.
 - **Antes de reiniciar la rama de trabajo desde `main`, comprobar `git log origin/main..HEAD`:** si hay commits sin mergear, un push con `--force-with-lease` los borra de la rama remota (el 22-oct pasó con la actualización de la memoria técnica y hubo que recuperarla del repositorio local).
 - El workflow `Deploy` no tiene aprobación manual: no se lanza sin orden.
+- **Claude nunca ejecuta SQL ni maneja secretos.** Todo cambio en MySQL se entrega como scripts (cambio, verificación y reversión) que ejecuta el responsable; los tokens y claves (por ejemplo el de Chatrace) los carga el responsable en AWS con `deploy/set-lambda-env.ps1` y nunca se comparten en el chat ni en el repositorio.
 
 **Comprobación rápida del estado**
 ```bash
@@ -42,7 +44,8 @@ curl -s https://leads.mvevip.com/health           # {"status":"ok",...}
 2. Subir las acciones de GitHub que usan Node 20 y alinear los Dockerfiles locales a Node 24.
 3. Iconos PNG de la PWA y de las notificaciones (hoy no existen).
 4. Seguridad pendiente: RDS accesible públicamente, rol compartido con `AmazonS3FullAccess` y el hash del administrador en `database_setup.sql`.
-5. Ideas aplazadas: selector de tonos para el chime de la app, alertas por WhatsApp.
+5. **Chatrace (etapa 1, ya desarrollada):** ponerla en marcha con los pasos de 7.9 (verificar el id, SQL, token, desplegar, probar) y después la etapa 2 (etiquetas por intención desde el chat, 11.1 nº 16).
+6. Ideas aplazadas: selector de tonos para el chime de la app, alertas por WhatsApp.
 
 ---
 
@@ -143,6 +146,8 @@ Los límites son **globales por ruta** y de **mejor esfuerzo**: frenan bien la c
 
 Opcionales (no definidas en producción): `ORIGIN_VERIFY_SECRET_PREVIOUS` (rotación), `CORS_ORIGINS` (por defecto `https://leads.mvevip.com,http://localhost:6410`), `CRON_SECRET` (habilita la ruta HTTP del cron; sin ella responde 404). `.env.example` documenta todas.
 
+Integración con Chatrace (todas opcionales; **sin `CHATRACE_API_TOKEN` la integración queda apagada** y nada cambia): `CHATRACE_API_TOKEN` (secreto; se carga con `deploy/set-lambda-env.ps1`, ver 7.9), `CHATRACE_BASE_URL` (por defecto `https://api.chatrace.com`; permite apuntar a un servidor simulado en las pruebas), `CHATRACE_DEFAULT_COUNTRY` (código de país para teléfonos sin él, por defecto `593`) y `CHATRACE_TIMEOUT_MS` (tiempo máximo por llamada, por defecto `4000`).
+
 > **Cuidado al editarlas:** `aws lambda update-function-configuration --environment` **reemplaza todas** las variables. Siempre se debe leer las actuales, combinar y escribir (ver 7.6). Nunca pegar valores secretos en chats o tickets.
 
 ---
@@ -237,6 +242,33 @@ mvevip_lead_app/
 
 **Decisión (23-oct-2026):** se mantiene esta configuración sin cambios. Opciones evaluadas y aplazadas: (1) selector de 3 o 4 tonos para el chime de la app, un cambio pequeño; (2) cada asesor elige su tono en Android; (3) app nativa con Capacitor para tener sonido propio también con la app cerrada y en iPhone (descartada por ahora: cuentas de desarrollador, revisión de las tiendas, FCM/APNs en lugar de Web Push y dos apps que mantener); (4) alertas por WhatsApp (ya en el roadmap), con el sonido que cada persona tenga en WhatsApp.
 
+### 4.5. Integración con Chatrace (etapa 1)
+
+*Estado al 23-oct-2026: desarrollada y probada, en un PR; sin desplegar. Puesta en marcha: 7.9.*
+
+**Qué hace.** Al crear un recordatorio desde el chat (herramienta `create_reminder`, `geminiService.js`), el cliente queda en Chatrace (`https://api.chatrace.com`, documentación Swagger en `/swagger/`): si el contacto ya existe se le agregan las etiquetas; si no existe se crea con sus datos y las mismas etiquetas.
+
+**Cómo identifica al contacto.** Según indicó el responsable, el id de un contacto en Chatrace es su **teléfono con código de país, solo dígitos** (`593991234567`), tanto para buscarlo (`GET /contacts/{id}`) como al crearlo. `normalizePhone` (`chatraceService.js`) convierte lo que escriba el asesor (`0991234567`, `+593 99 123 4567`, `991234567`…) a ese formato y, si no lo reconoce, **no adivina**: se omite la sincronización. *La confirmación del formato con el token real está pendiente (7.9, paso 0).*
+
+**Flujo.** `GET /contacts/{id}`: si existe, agrega cada etiqueta con `POST /contacts/{id}/tags/{tag_id}` (los ids se resuelven por nombre con `GET /accounts/tags/name/{nombre}` y se guardan 10 minutos en memoria); si responde 404, `POST /contacts` con `phone` (`+dígitos`), `first_name`, `last_name` y acciones `add_tag` por nombre.
+
+**Etiquetas.** La **fija** (`app_settings` clave `chatrace.fixed_tag`) más la del **asesor asignado** (`chatrace.advisor_tag.<userId>`). Las configuran los administradores en la app: la fija en **Perfil → Integración Chatrace** y la de cada asesor en **Gestionar Usuarios & Asesores**. En ambos sitios se elige una etiqueta existente de Chatrace o se crea una nueva; una etiqueta que no existe **solo se crea si el administrador lo pide expresamente**.
+
+**Aislamiento: el lead y el recordatorio funcionan igual que siempre.**
+- `syncReminderContact` (`chatraceSync.js`) **nunca lanza**: cualquier fallo se registra en logs y se devuelve como resultado. El recordatorio ya está creado cuando se llama; la respuesta del chat es la de siempre más un aviso.
+- Sin `CHATRACE_API_TOKEN` el resultado de `create_reminder` es **idéntico** al de antes de existir la integración.
+- Tope de 4 s para toda la sincronización, y se omite si al turno (24 s) le quedan menos de 6 s. Un solo reintento ante 429 o 5xx. Sin reintentos automáticos posteriores.
+- Los errores propios solo tienen el tipo (`auth`, `timeout`, `network`, `rate_limited`, `server`, `bad_request`) y el estado HTTP; **nunca teléfono, nombre, token ni el cuerpo de la respuesta**. El resultado (`result.chatrace`: `status`, `reason`, `created`, `message`) viaja al modelo, a `ChatMessage.metadata` y a la pantalla sin datos del cliente.
+- Si la tabla `app_settings` aún no existe, el recordatorio se crea y se sincroniza sin etiquetas.
+
+**En el chat.** El asistente menciona el resultado en una frase (instrucción en `SYSTEM_PROMPT`) y la pantalla agrega un aviso junto a «Nuevo lead creado» («Contacto nuevo en Chatrace», «Etiquetado en Chatrace», «Sin teléfono: no se sincronizó», «No se pudo sincronizar con Chatrace»…). Igual que «Nuevo lead creado», solo se ve en los mensajes en vivo: el historial recargado guarda `metadata` y no muestra los avisos.
+
+**Código.** Backend: `server/src/services/chatraceService.js` (cliente HTTP, `normalizePhone`, etiquetas, `syncContact`), `chatraceSettings.js` (lectura y escritura de `app_settings`), `chatraceSync.js` (coordina un recordatorio y nunca lanza); endpoints de administración (`adminController.js`): `GET /api/admin/chatrace/status`, `GET /api/admin/chatrace/tags`, `PUT /api/admin/chatrace/fixed-tag` y `PUT /api/admin/users/:id/chatrace-tag`; `GET /api/admin/users` incluye `chatraceTag`. Frontend: `ChatraceTagPicker.jsx` (selector reutilizable y hook `useChatraceTags`), `ChatraceIntegrationPanel.jsx` (Perfil), el modal de usuarios y `AssistantChatView.jsx`.
+
+**Fuera de alcance por ahora:** etiquetas por *intención* desde el chat (etapa 2, ver 11.1), sincronizar al reagendar, transferir o cerrar un recordatorio, la API REST `POST /reminders`, reintentos automáticos con estado por recordatorio y cualquier otra función de Chatrace (mensajes, flujos, pipelines, citas). `chatraceService.js` queda reutilizable para ellas.
+
+**Privacidad.** El nombre y el teléfono del cliente viajan a Chatrace (hoy ya viajan a Google Gemini).
+
 ---
 
 ## 5. Base de datos
@@ -252,8 +284,9 @@ Esquema `mvevip_lead` (MySQL 8.4, `utf8mb4_unicode_ci`). Script completo: `deplo
 | `push_subscriptions` | Suscripciones Web Push por dispositivo |
 | `chat_messages` | Historial del asistente por usuario |
 | `rate_limit_events` | Contadores de los límites de intentos (claves en hash SHA-256; se purgan los de más de 24 h cada hora) |
+| `app_settings` | Configuración clave/valor de la app. Hoy: etiquetas de Chatrace (`chatrace.fixed_tag`, `chatrace.advisor_tag.<userId>`). Quitar una etiqueta guarda una cadena vacía (no se borran filas). **Migración 002, pendiente de ejecutar** |
 
-**Migraciones aplicadas:** `001_rate_limit_and_token_version.sql` (21-oct-2026).
+**Migraciones aplicadas:** `001_rate_limit_and_token_version.sql` (21-oct-2026). **Pendiente de ejecutar:** `002_chatrace.sql` (solo crea la tabla `app_settings`, es idempotente y no toca ninguna tabla existente), con `002_chatrace_verify.sql` (solo lectura) y `002_chatrace_rollback.sql`. **Las ejecuta el responsable, antes de desplegar.**
 
 > Los objetos nuevos se consultan con SQL directo (`$queryRaw`) y con tolerancia a fallos, sin depender del cliente de Prisma generado. `schema.prisma` los documenta; el próximo `prisma generate` los incluirá.
 
@@ -312,6 +345,9 @@ aws logs filter-log-events --log-group-name /aws/lambda/mvevip-lead-api --start-
 | `rate_limit_*`, `token_version_*` | Fallos de las tablas del limitador o de `tokenVersion` (el sistema sigue funcionando sin límite) |
 | `origin_verify_failed` | Petición sin la cabecera de origen válida (en `enforce` se rechaza con 403) |
 | `sign_media` | Fallo al firmar una URL (se responde sin firmar) |
+| `chatrace_sync` | Resultado de sincronizar un recordatorio con Chatrace: `reminderId`, `userId`, `status`, `reason`, `created`, etiquetas aplicadas y fallidas, `durationMs`. Nunca teléfono ni nombre |
+| `chatrace_sync_failed` | Fallo hablando con Chatrace: solo `kind` (`auth`, `timeout`, `network`, `rate_limited`, `server`, `bad_request`, `unexpected`) y el estado HTTP |
+| `chatrace_config`, `chatrace_admin_*` | Configuración de etiquetas (quién la cambió) o lectura de `app_settings` no disponible (¿falta la migración 002?) |
 
 Si un usuario reporta un error, el `requestId` que recibió en la respuesta 500 coincide con el `RequestId` del log.
 
@@ -362,6 +398,19 @@ Los nombres de los menús varían según la marca y la versión del sistema. Des
 - **macOS:** Ajustes del Sistema → Notificaciones → Google Chrome → estilo Alertas y «Reproducir sonido para notificaciones».
 - **Probar:** en Perfil pulsar «Probar Push» y de inmediato bloquear el teléfono o cambiar de app.
 - **Actualizar la app a la última versión:** Perfil → Versión de la App → «Buscar / Probar».
+
+### 7.9. Puesta en marcha y operación de la integración con Chatrace
+Orden obligatorio. Los pasos 1 y 2 los ejecuta el responsable (Claude no ejecuta SQL ni maneja secretos).
+
+0. **Verificar el formato del id (una vez, con el token en tu terminal, sin compartirlo):** `GET https://api.chatrace.com/accounts/tags` (cabecera `X-ACCESS-TOKEN`) debe listar las etiquetas, y `GET /contacts/593XXXXXXXXX` de un contacto que ya exista debe responder 200 (404 si no existe). Si el id no fuera el teléfono en dígitos con código de país, hay que ajustar `normalizePhone`.
+1. **SQL:** ejecutar `deploy/migrations/002_chatrace.sql` contra `mvevip_lead` con un usuario con permiso `CREATE` y después `002_chatrace_verify.sql` (debe mostrar la tabla `app_settings`). Es idempotente.
+2. **Token:** `.\deploy\set-lambda-env.ps1 -DryRun` (simula, no cambia nada) y luego `.\deploy\set-lambda-env.ps1` (pide el token con entrada oculta; conserva las demás variables y solo muestra nombres). *El script no se pudo ejecutar en un PowerShell real durante su desarrollo: probar siempre primero con `-DryRun`.*
+3. **Desplegar:** `Deploy` del backend y luego del frontend (1.0.9).
+4. **Configurar en la app (administrador):** Perfil → Integración Chatrace debe decir **Conectada**; elegir o crear la etiqueta fija; en Gestionar Usuarios & Asesores elegir la etiqueta de cada asesor.
+5. **Probar con un número propio:** crear un recordatorio desde el chat con ese teléfono (el chat muestra «Contacto nuevo en Chatrace» y en Chatrace aparece con las etiquetas); repetirlo (no se duplica); uno sin teléfono (avisa y se crea); revisar en los logs `chatrace_sync` y que `Errors` y `Throttles` de la Lambda sigan en 0.
+
+**Apagar la integración al instante** (sin redesplegar): `.\deploy\set-lambda-env.ps1 -Remove`. Los recordatorios siguen funcionando igual; el Perfil mostrará «No activada».
+**Revertir por completo:** `Rollback` del backend y, si se quiere, `002_chatrace_rollback.sql` (borra solo `app_settings` y la configuración de etiquetas).
 
 ---
 
@@ -432,7 +481,9 @@ Archivos: `.github/workflows/ci.yml`, `deploy.yml` y `rollback.yml`; scripts en 
 
 ## 9. Pruebas
 
-El repositorio **no tiene pruebas automatizadas**. Durante la sesión del 21-oct-2026 se validó cada cambio con pruebas locales descartables (Express, bcrypt y JWT reales, con Prisma, S3 y Gemini simulados) y con comprobaciones en producción mediante logs y métricas de CloudWatch. Incorporar una suite en el repositorio está entre los pendientes.
+Desde el 23-oct-2026 existe una primera suite en `server/test/` (`npm test`, que usa `node --test` sin dependencias nuevas y corre en el CI). Cubre **solo la integración con Chatrace** (74 pruebas): `normalizePhone`, el cliente HTTP contra un servidor simulado (contacto existente y nuevo, 401, 429, 5xx, timeout, red caída, token ausente, teléfono inválido), `create_reminder` con Prisma falso (Chatrace caído o lento, sin teléfono, sin tiempo en el turno, sin token → respuesta idéntica a la de antes) y los endpoints de administración. Comprueban además que ni los logs ni el resultado filtran teléfono, nombre ni token. Nunca llaman a la API real.
+
+El resto del sistema sigue **sin pruebas automatizadas**: hasta ahora se validó con pruebas locales descartables (Express, bcrypt y JWT reales, con Prisma, S3 y Gemini simulados) y con comprobaciones en producción mediante logs y métricas de CloudWatch. Ampliar la suite es el pendiente nº 10 (11.1).
 
 ---
 
@@ -477,6 +528,17 @@ El repositorio **no tiene pruebas automatizadas**. Durante la sesión del 21-oct
 | Despliegues | Frontend 1.0.7 (run 3), backend (run 5) y frontend 1.0.8 (run 6) con el flujo nuevo. Los dos primeros sin cambios de código respecto a lo ya publicado |
 | Decisión | Dejar el sonido como está (4.4); sin selector de tonos por ahora |
 
+### Sesión del 23-oct-2026 (integración con Chatrace, etapa 1)
+| Cambio | Detalle |
+|---|---|
+| Plan | Aprobado el plan en dos etapas (sincronizar y etiquetar al crear el recordatorio; después etiquetas por intención desde el chat) |
+| Backend | `chatraceService.js`, `chatraceSettings.js`, `chatraceSync.js`; enganche aislado en `create_reminder`; 4 endpoints de administración; `executeTool` recibe el `deadline` del turno |
+| Base de datos | Migración `002_chatrace.sql` (tabla `app_settings`) con verificación y reversión: **pendiente de ejecutar por el responsable** |
+| Frontend 1.0.9 | Selector de etiquetas (existente o crear), etiqueta por asesor, panel de Perfil y aviso en el chat |
+| Pruebas | Primera suite (`npm test`, 74 pruebas) y paso nuevo en el CI |
+| Operación | `deploy/set-lambda-env.ps1` para cargar o quitar variables de la Lambda sin perder las demás |
+| Estado | En un PR, sin desplegar |
+
 ---
 
 ## 11. Pendientes y limitaciones conocidas
@@ -499,6 +561,10 @@ El repositorio **no tiene pruebas automatizadas**. Durante la sesión del 21-oct
 | 12 | **Audio, WhatsApp, métricas en el chat, geolocalización** | Funcionalidades futuras (prioridad media a baja) |
 | 13 | **Selector de tonos para el chime de la app** | Opcional y aplazado el 23-oct-2026: 3 o 4 tonos elegibles en Perfil además del volumen. Solo aplica con la app abierta (ver 4.4) |
 | 14 | **Verificar la restricción de ramas del environment `production`** | Recomendado: *Deployment branches* = `main`. No se pudo comprobar desde las sesiones de Claude |
+| 15 | **Chatrace, etapa 1: puesta en marcha** | Pasos 0 a 5 de 7.9: verificar el formato del id con el token real, ejecutar la migración 002, cargar el token, desplegar y probar con un número propio. Confirmar con el responsable la privacidad de enviar nombre y teléfono a Chatrace |
+| 16 | **Chatrace, etapa 2: etiquetas por intención desde el chat** | Diseño aprobado, sin implementar: tabla `chatrace_intents` (etiqueta de la intención, pista para el asistente y la etiqueta a aplicar; se desactivan, no se borran), panel en Perfil, herramienta `apply_lead_tag` del asistente (el asistente asocia frases como «este lead ya compró en otra agencia» con la intención configurada, pregunta si es ambiguo y acepta una etiqueta libre existente sin editar la lista; crear etiquetas nuevas desde el chat, solo administradores y con confirmación), permisos (un asesor solo etiqueta sus leads) y nota en el historial del lead. Mismo aislamiento de errores que la etapa 1 |
+| 17 | **Chatrace: más funciones** | Sincronizar al reagendar, transferir o cerrar; reintentos automáticos con estado por recordatorio (requeriría migración y el cron); la API REST `POST /reminders`; mensajes, flujos, pipelines y citas |
+| 18 | **`deploy/set-lambda-env.ps1` sin probar en un PowerShell real** | Se escribió sin poder ejecutarlo. Probar siempre con `-DryRun` la primera vez |
 
 ### 11.2. Dependencias (`npm audit`, 21-oct-2026)
 - **`multer` 1.4.5-lts.2** (carga de archivos del asistente): el registro de npm lo marca como obsoleto por vulnerabilidades corregidas en la 2.x. Pendiente de actualizar a 2.x y probar la subida de imágenes y notas de voz.
